@@ -4,3 +4,5 @@ version = "0.1.0"
 authors = [ "Gustav Behm <me@rootmos.io>" ]
 
 [dependencies]
+config = "0.9.3"
+clap = "2.33.0"
