@@ -6,15 +6,16 @@ ADD Makefile ./
 ADD evm evm
 RUN make build-evm
 
-FROM rust:1.38.0-alpine3.10 as rust
-RUN apk add --update make
+FROM rust:1.38.0-slim-buster as rust
+RUN apt-get update && apt-get install -y make libssl-dev pkg-config
 WORKDIR /git-audit
+COPY --from=evm /git-audit/build/evm build/evm
 ADD Makefile Cargo.toml Cargo.lock ./
 ADD src src
 RUN make build-exe
 
-FROM python:3.7.4-alpine3.10 as tests
-RUN apk add --update make gcc musl-dev libffi-dev libgit2-dev
+FROM python:3.7.4-slim-buster as tests
+RUN apt-get update && apt-get install -y make gcc
 WORKDIR /git-audit
 ADD Makefile ./
 COPY --from=rust /git-audit/git-audit .

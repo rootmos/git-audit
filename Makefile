@@ -11,10 +11,11 @@ export ETHEREUM_RPC_TARGET ?= http://localhost:$(ETHEREUM_RPC_PORT)
 build: build-exe build-evm
 
 build-exe: $(GIT_AUDIT_EXE)
+.PHONY: $(GIT_AUDIT_EXE)
 $(GIT_AUDIT_EXE):
 	@mkdir -p "$(BUILD)"
-	$(CARGO) build --release --target-dir="$(BUILD)"
-	install "$(BUILD)/release/git-audit" "$@"
+	$(CARGO) build --target-dir="$(BUILD)"
+	install "$(BUILD)/debug/git-audit" "$@"
 
 build-evm:
 	@mkdir -p "$(BUILD)/evm"
