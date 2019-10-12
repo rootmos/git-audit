@@ -19,7 +19,7 @@ $(GIT_AUDIT_EXE):
 
 build-evm:
 	@mkdir -p "$(BUILD)/evm"
-	$(SOLC) --optimize --overwrite --abi --bin -o "$(BUILD)/evm" evm/Mock.sol
+	$(SOLC) --optimize --overwrite --abi --bin -o "$(BUILD)/evm" evm/GitAudit.sol
 
 test:
 	$(MAKE) -C tests
