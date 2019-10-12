@@ -14,8 +14,8 @@ ADD src src
 RUN make build-rust
 
 FROM python:3.7.4-alpine3.10 as tests
-RUN apk add --update make gcc musl-dev
+RUN apk add --update make gcc musl-dev libffi-dev libgit2-dev
 WORKDIR /git-audit
 ADD Makefile ./
 ADD tests tests
-RUN make test
+ENTRYPOINT ["make", "test"]
