@@ -6,19 +6,24 @@ use std::io::prelude::*;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Ethereum {
-    pub private_key: Option<String>,
-    pub rpc_target: Option<String>,
-    pub chain_id: Option<u8>,
+    private_key: Option<String>,
+    rpc_target: Option<String>,
+    chain_id: Option<u8>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Contract {
+    address: String,
+    abi: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsRoot {
     ethereum: Option<Ethereum>,
-    contract: Option<String>,
+    contract: Option<Contract>,
 }
 
 pub struct Settings {
-    global: SettingsRoot,
     repository: SettingsRoot,
     merged: SettingsRoot,
 }
@@ -41,7 +46,7 @@ impl Settings {
         let mut m = Config::new();
         m.merge(g.to_owned())?.merge(r.to_owned())?;
 
-        Ok(Settings { global: g.try_into()?, repository: r.try_into()?, merged: m.try_into()? })
+        Ok(Settings { repository: r.try_into()?, merged: m.try_into()? })
     }
 
     pub fn ethereum_rpc_target(&self) -> &str {
@@ -56,15 +61,17 @@ impl Settings {
         self.merged.ethereum.as_ref().and_then(|e| e.chain_id.as_ref()).unwrap()
     }
 
-    pub fn set_contract(&mut self, contract: &String) -> &Self {
-        self.repository.contract = Some(contract.to_owned());
-        self.merged.contract = Some(contract.to_owned());
+    pub fn set_contract(&mut self, address: &str, abi: &str) -> &Self {
+        let abi_j: serde_json::Value = serde_json::from_str(abi).unwrap();
+        self.repository.contract = Some(Contract {
+            address: address.to_owned(), abi: abi_j,
+        });
+        self.merged.contract = self.repository.contract.clone();
         self
     }
 
     pub fn write_repository_settings(self) -> () {
         let s = serde_json::to_string(&self.repository).unwrap();
-        log::debug!("{}", s);
         match fs::OpenOptions::new().write(true).create_new(true).open(REPO_CONFIG_FILE) {
             Ok(mut f) => f.write_all(s.as_bytes()).unwrap(),
             Err(e) => panic!("{}", e)

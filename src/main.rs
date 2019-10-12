@@ -8,6 +8,7 @@ extern crate dirs;
 extern crate config;
 extern crate hex;
 extern crate secp256k1;
+extern crate ethabi;
 
 extern crate clap;
 use clap::{Arg, App, SubCommand};
@@ -35,7 +36,7 @@ fn main() {
     let mut settings = settings::Settings::new(matches.value_of("global-config")).unwrap();
 
     let code = hex::decode(include_str!("../build/evm/Mock.bin")).unwrap();
-    let _abi = include_str!("../build/evm/Mock.abi");
+    let abi_json = include_str!("../build/evm/Mock.abi");
 
     if let Some(_matches) = matches.subcommand_matches("init") {
         let mut el = tokio_core::reactor::Core::new().unwrap();
@@ -65,7 +66,7 @@ fn main() {
 
         let txh = el.run(tx).unwrap();
         log::info!("deployed contract: {:?}", txh);
-        settings.set_contract(&hex::encode(txh.as_bytes()));
+        settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
         settings.write_repository_settings();
     }
 }
