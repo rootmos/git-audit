@@ -49,6 +49,14 @@ class GitAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             gc = mk_global_config(d)
             r = pygit2.init_repository(os.path.join(d, "repo"))
+            tree = r.index.write_tree()
+            c0 = r.create_commit(
+                "refs/heads/master",
+                fresh.author(), fresh.committer(),
+                fresh.commit_msg(),
+                tree, []
+            )
+
             run([f"--global-config={gc}", "init"], cwd=r.path)
 
             with open(os.path.join(r.path, ".git-audit.json")) as f:
@@ -59,5 +67,4 @@ class GitAuditTests(unittest.TestCase):
             abi = c["contract"]["abi"],
         )
 
-        i = random.randint(0, 1000)
-        self.assertEqual(contract.functions.echo(i).call(), i)
+        self.assertEqual(contract.functions.commits().call(), [c0])
