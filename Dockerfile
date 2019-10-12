@@ -15,7 +15,7 @@ ADD src src
 RUN make build-exe
 
 FROM python:3.7.4-slim-buster as tests
-RUN apt-get update && apt-get install -y make gcc
+RUN apt-get update && apt-get install -y make gcc curl
 WORKDIR /git-audit
 ADD Makefile ./
 COPY --from=rust /git-audit/git-audit .
@@ -23,4 +23,4 @@ WORKDIR /git-audit/tests
 ADD tests/requirements.txt tests/Makefile ./
 RUN make deps
 ADD tests /git-audit/tests
-ENTRYPOINT ["make", "test", "GIT_AUDIT_EXE=/git-audit/git-audit"]
+ENTRYPOINT ["make", "wait-for-rpc", "test", "GIT_AUDIT_EXE=/git-audit/git-audit"]
