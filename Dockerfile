@@ -11,11 +11,12 @@ RUN apk add --update make
 WORKDIR /git-audit
 ADD Makefile Cargo.toml Cargo.lock ./
 ADD src src
-RUN make build-rust
+RUN make build-exe
 
 FROM python:3.7.4-alpine3.10 as tests
 RUN apk add --update make gcc musl-dev libffi-dev libgit2-dev
 WORKDIR /git-audit
 ADD Makefile ./
+COPY --from=rust /git-audit/git-audit .
 ADD tests tests
-ENTRYPOINT ["make", "test"]
+ENTRYPOINT ["make", "test", "GIT_AUDIT_EXE=/git-audit/git-audit"]
