@@ -1,5 +1,3 @@
 services:
   - docker
-script:
-  - docker-compose build
-  - docker-compose run tests
+script: make test-compose

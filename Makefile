@@ -1,8 +1,12 @@
 CARGO ?= cargo
 SOLC ?= solc
-BUILD ?= $(shell pwd)/build
+DOCKER_COMPOSE ?= docker-compose
 
+BUILD ?= $(shell pwd)/build
 export GIT_AUDIT_EXE ?= $(shell pwd)/git-audit
+
+export ETHEREUM_RPC_PORT ?= 18545
+export ETHEREUM_RPC_TARGET ?= http://localhost:$(ETHEREUM_RPC_PORT)
 
 build: build-exe build-evm
 
@@ -23,4 +27,17 @@ clean:
 	rm -rf "$(BUILD)"
 	$(MAKE) -C tests clean
 
+SERVICES ?= ethereum
+run-services:
+	$(DOCKER_COMPOSE) up --force-recreate $(SERVICES)
+
+test-compose:
+	$(DOCKER_COMPOSE) build
+	$(DOCKER_COMPOSE) run tests
+
+stop:
+	$(DOCKER_COMPOSE) stop
+	yes | $(DOCKER_COMPOSE) rm
+
 .PHONY: build build-exe build-evm test clean
+.PHONY: run-services stop

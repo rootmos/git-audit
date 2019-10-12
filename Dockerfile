@@ -18,5 +18,8 @@ RUN apk add --update make gcc musl-dev libffi-dev libgit2-dev
 WORKDIR /git-audit
 ADD Makefile ./
 COPY --from=rust /git-audit/git-audit .
-ADD tests tests
+WORKDIR /git-audit/tests
+ADD tests/requirements.txt tests/Makefile ./
+RUN make deps
+ADD tests /git-audit/tests
 ENTRYPOINT ["make", "test", "GIT_AUDIT_EXE=/git-audit/git-audit"]
