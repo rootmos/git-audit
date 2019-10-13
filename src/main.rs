@@ -15,7 +15,7 @@ extern crate git2;
 use git2::{Repository, Signature};
 
 extern crate clap;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App, SubCommand, ArgMatches};
 
 extern crate ethereum_tx_sign;
 use ethereum_tx_sign::RawTransaction;
@@ -37,10 +37,101 @@ fn private_key(s: &Settings) -> (H160, H256) {
     (H160::from_slice(a), H256::from_slice(&raw))
 }
 
+struct Context<'a, T: web3::Transport> {
+    settings: &'a mut Settings,
+    web3: &'a web3::Web3<T>,
+}
+
+fn init<'a, T: web3::Transport>(matches: &'a ArgMatches<'a>, ctx: &'a mut Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+    let r = Repository::open(".").unwrap();
+
+    let (a, sk) = private_key(&ctx.settings);
+
+    let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
+    let abi_json = include_str!("../build/evm/GitAudit.abi");
+
+    let f = ctx.web3.eth().gas_price().then(move |gp| {
+        ctx.web3.eth().transaction_count(a, None).then(move |n| {
+            let tx = RawTransaction {
+                nonce: n.unwrap(),
+                to: None,
+                value: U256::from(0),
+                gas_price: gp.unwrap(),
+                gas: U256::from(1000000), // TODO: estimate gas
+                data: code,
+            };
+            let stx = tx.sign(&sk, &ctx.settings.ethereum_chain_id());
+            send_raw_transaction_with_confirmation(ctx.web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
+                .map(|r| r.contract_address.unwrap()).map(move |txh| {
+                    log::info!("deployed contract: {:?}", txh);
+                    ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
+                    ctx.settings.write_repository_settings();
+
+                    if ! matches.is_present("no-commit") {
+                        let p = if r.is_empty().unwrap() { None } else {
+                            Some(r.head().unwrap().peel_to_commit().unwrap())
+                        };
+
+                        let mut tb = match &p {
+                            Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
+                            None => r.treebuilder(None).unwrap(),
+                        };
+
+                        tb.insert(
+                            settings::repository_config_file(),
+                            r.blob_path(settings::repository_config_file()).unwrap(),
+                            0o100644,
+                        ).unwrap();
+                        let t = tb.write().unwrap();
+
+                        let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
+                        let c = r.commit(Some("HEAD"), &s, &s,
+                            "Initializing git-audit",
+                            &r.find_tree(t).unwrap(),
+                            &p.iter().collect::<Vec<_>>(),
+                        ).unwrap();
+
+                        log::info!("committed git-audit repository config: {}", c);
+                    };
+                })
+        })
+    });
+
+    Box::new(f)
+}
+
+fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+    let r = Repository::open(".").unwrap();
+    let (a, sk) = private_key(&ctx.settings);
+    let abi = ethabi::Contract::load(ctx.settings.contract_abi_json().as_bytes()).unwrap();
+    let f = abi.function("anchor").unwrap();
+    let h = r.head().unwrap().target().unwrap();
+    log::info!("anchoring HEAD: {}", h);
+    let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
+
+    let f = ctx.web3.eth().gas_price().then(move |gp| {
+        ctx.web3.eth().transaction_count(a, None).then(move |n| {
+            let to = H160::from_slice(&hex::decode(ctx.settings.contract_address()).unwrap());
+            let tx = RawTransaction {
+                nonce: n.unwrap(),
+                to: Some(to),
+                value: U256::from(0),
+                gas_price: gp.unwrap(),
+                gas: U256::from(1000000), // TODO: estimate gas
+                data: input,
+            };
+            let stx = tx.sign(&sk, &ctx.settings.ethereum_chain_id());
+            send_raw_transaction_with_confirmation(ctx.web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
+        })
+    }).map(|_| ());
+
+    Box::new(f)
+}
+
 fn main() {
     env_logger::init();
 
-    let matches = App::new("git-audit")
+    let matches = &App::new("git-audit")
         .version("0.1.0")
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
@@ -51,93 +142,20 @@ fn main() {
         .subcommand(SubCommand::with_name("validate"))
         .get_matches();
 
-    let mut settings = Settings::new(matches.value_of("global-config")).unwrap();
-
+    let settings = &mut Settings::new(matches.value_of("global-config")).unwrap();
     let mut el = tokio_core::reactor::Core::new().unwrap();
     let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
                                                     &el.handle(), 1).unwrap();
-    let web3 = web3::Web3::new(t);
+    let web3 = &web3::Web3::new(t);
+    let mut ctx = Context { settings, web3, };
 
-    if let Some(matches) = matches.subcommand_matches("init") {
-        let r = Repository::open(".").unwrap();
+    let f = if let Some(matches) = matches.subcommand_matches("init") {
+        init(matches, &mut ctx)
+    } else if let Some(matches) = matches.subcommand_matches("anchor") {
+        anchor(matches, &ctx)
+    } else {
+        Box::new(web3::futures::future::ok(()))
+    };
 
-        let (a, sk) = private_key(&settings);
-
-        let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
-        let abi_json = include_str!("../build/evm/GitAudit.abi");
-
-        let tx = web3.eth().gas_price().then(|gp| {
-            web3.eth().transaction_count(a, None).then(|n| {
-                let tx = RawTransaction {
-                    nonce: n.unwrap(),
-                    to: None,
-                    value: U256::from(0),
-                    gas_price: gp.unwrap(),
-                    gas: U256::from(1000000), // TODO: estimate gas
-                    data: code,
-                };
-                let stx = tx.sign(&sk, &settings.ethereum_chain_id());
-                send_raw_transaction_with_confirmation(web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
-            }).map(|r| r.contract_address.unwrap())
-        });
-
-        let txh = el.run(tx).unwrap();
-        log::info!("deployed contract: {:?}", txh);
-        settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
-        settings.write_repository_settings();
-
-        if ! matches.is_present("no-commit") {
-
-            let p = if r.is_empty().unwrap() { None } else {
-                Some(r.head().unwrap().peel_to_commit().unwrap())
-            };
-
-            let mut tb = match &p {
-                Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
-                None => r.treebuilder(None).unwrap(),
-            };
-
-            tb.insert(
-                settings::repository_config_file(),
-                r.blob_path(settings::repository_config_file()).unwrap(),
-                0o100644,
-            ).unwrap();
-            let t = tb.write().unwrap();
-
-            let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
-            let c = r.commit(Some("HEAD"), &s, &s,
-                "Initializing git-audit",
-                &r.find_tree(t).unwrap(),
-                &p.iter().collect::<Vec<_>>(),
-            ).unwrap();
-
-            log::info!("committed git-audit repository config: {}", c);
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("anchor") {
-        let r = Repository::open(".").unwrap();
-        let (a, sk) = private_key(&settings);
-        let abi = ethabi::Contract::load(settings.contract_abi_json().as_bytes()).unwrap();
-        let f = abi.function("anchor").unwrap();
-        let h = r.head().unwrap().target().unwrap();
-        log::info!("anchoring HEAD: {}", h);
-        let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
-
-        let tx = web3.eth().gas_price().then(|gp| {
-            web3.eth().transaction_count(a, None).then(|n| {
-                let to = H160::from_slice(&hex::decode(settings.contract_address()).unwrap());
-                let tx = RawTransaction {
-                    nonce: n.unwrap(),
-                    to: Some(to),
-                    value: U256::from(0),
-                    gas_price: gp.unwrap(),
-                    gas: U256::from(1000000), // TODO: estimate gas
-                    data: input,
-                };
-                let stx = tx.sign(&sk, &settings.ethereum_chain_id());
-                send_raw_transaction_with_confirmation(web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
-            })
-        });
-
-        let _ = el.run(tx).unwrap();
-    }
+    let () = el.run(f).unwrap();
 }

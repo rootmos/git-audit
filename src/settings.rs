@@ -89,7 +89,7 @@ impl Settings {
         self
     }
 
-    pub fn write_repository_settings(self) -> () {
+    pub fn write_repository_settings(&self) -> () {
         let s = serde_json::to_string(&self.repository).unwrap();
         match fs::OpenOptions::new().write(true).create_new(true).open(repository_config_file()) {
             Ok(mut f) => f.write_all(s.as_bytes()).unwrap(),
