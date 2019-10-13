@@ -101,3 +101,14 @@ class GitAuditTests(unittest.TestCase):
             te.run(["anchor"])
 
             self.assertEqual(te.inspect().commits, [c0.raw, c1.raw])
+
+    def test_validate_empty_repo(self):
+        with test_env() as te:
+            te.run(["init"])
+            te.run(["validate"])
+
+    def test_validate(self):
+        with test_env() as te:
+            te.run(["init"])
+            te.commit()
+            te.run(["validate"])

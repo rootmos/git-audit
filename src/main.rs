@@ -36,6 +36,7 @@ fn main() {
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
         .subcommand(SubCommand::with_name("init"))
         .subcommand(SubCommand::with_name("anchor"))
+        .subcommand(SubCommand::with_name("validate"))
         .get_matches();
 
     let mut settings = settings::Settings::new(matches.value_of("global-config")).unwrap();
