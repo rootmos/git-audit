@@ -9,6 +9,28 @@ import random
 
 from . import fresh, w3, faucets, ethereum_rpc_target, normalize
 
+class Content:
+    def __init__(self, path, name=None, content=None):
+        self.name = name or f"content-{fresh.salt(5)}.txt"
+        self.path = os.path.join(path, self.name)
+        if not os.path.isfile(self.path):
+            self.refresh()
+
+    def refresh(self):
+        self.content = fresh.salt(12)
+
+    @property
+    def content(self):
+        print(f"read: {self.path}")
+        with open(self.path, "r") as f:
+            return f.read()
+
+    @content.setter
+    def content(self, content):
+        print(f"write: {self.path} {content}")
+        with open(self.path, "w") as f:
+            f.write(content)
+
 class test_env:
     def __init__(self, master=None, owner_key=None):
         self.master = master
@@ -62,17 +84,28 @@ class test_env:
             env=env,
         )
 
-    def commit(self):
+    def file(self, name=None):
+        return Content(self.path,
+            name = name.name if isinstance(name, Content) else name
+        )
+
+    def commit(self, content=None):
         try:
             parents = [self.repo.head.target]
         except:
             parents = []
 
+        tb = self.repo.TreeBuilder()
+        for c in content or []:
+            b = self.repo.create_blob_fromworkdir(c.name)
+            tb.insert(c.name, b, pygit2.GIT_FILEMODE_BLOB)
+        t = tb.write()
+
         return self.repo.create_commit(
             "refs/heads/master",
             fresh.author(), fresh.committer(),
             fresh.commit_msg(),
-            self.repo.index.write_tree(), parents
+            t, parents
         )
 
     def inspect(self):
@@ -105,10 +138,21 @@ class GitAudit:
         return cs
 
 class GitAuditTests(unittest.TestCase):
-    def test_init(self):
+    def test_init_empty_repo(self):
         with test_env() as te:
             te.run(["init"])
             self.assertNotEqual(len(w3.eth.getCode(te.inspect().contract.address)), 0)
+
+    def test_init_non_empty_repo(self):
+        with test_env() as te:
+            f0 = te.file()
+            f1 = te.file()
+            te.commit(content=[f0])
+            te.run(["init"])
+
+            with test_env(te) as c:
+                self.assertEqual(f0.content, c.file(f0).content)
+                self.assertNotEqual(f1.content, c.file(f1).content)
 
     def test_anchor(self):
         with test_env() as te:

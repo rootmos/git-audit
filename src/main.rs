@@ -87,7 +87,16 @@ fn main() {
         settings.write_repository_settings();
 
         if ! matches.is_present("no-commit") {
-            let mut tb = r.treebuilder(None).unwrap();
+
+            let p = if r.is_empty().unwrap() { None } else {
+                Some(r.head().unwrap().peel_to_commit().unwrap())
+            };
+
+            let mut tb = match &p {
+                Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
+                None => r.treebuilder(None).unwrap(),
+            };
+
             tb.insert(
                 settings::repository_config_file(),
                 r.blob_path(settings::repository_config_file()).unwrap(),
@@ -95,13 +104,11 @@ fn main() {
             ).unwrap();
             let t = tb.write().unwrap();
 
-            let c = r.commit(
-                Some("HEAD"),
-                &Signature::now("git-audit", "git-audit@rootmos.io").unwrap(),
-                &Signature::now("git-audit", "git-audit@rootmos.io").unwrap(),
+            let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
+            let c = r.commit(Some("HEAD"), &s, &s,
                 "Initializing git-audit",
                 &r.find_tree(t).unwrap(),
-                &[],
+                &p.iter().collect::<Vec<_>>(),
             ).unwrap();
 
             log::info!("committed git-audit repository config: {}", c);
