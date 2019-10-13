@@ -9,6 +9,10 @@ extern crate config;
 extern crate hex;
 extern crate secp256k1;
 extern crate ethabi;
+extern crate primitive_types;
+
+extern crate git2;
+use git2::Repository;
 
 extern crate clap;
 use clap::{Arg, App, SubCommand};
@@ -31,6 +35,7 @@ fn main() {
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
         .subcommand(SubCommand::with_name("init"))
+        .subcommand(SubCommand::with_name("anchor"))
         .get_matches();
 
     let mut settings = settings::Settings::new(matches.value_of("global-config")).unwrap();
@@ -38,17 +43,16 @@ fn main() {
     let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
     let abi_json = include_str!("../build/evm/GitAudit.abi");
 
+    let mut el = tokio_core::reactor::Core::new().unwrap();
+    let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
+                                                    &el.handle(), 1).unwrap();
+    let web3 = web3::Web3::new(t);
+    let raw = hex::decode(settings.ethereum_private_key()).unwrap();
+    let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
+    let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
+    let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
+
     if let Some(_matches) = matches.subcommand_matches("init") {
-        let mut el = tokio_core::reactor::Core::new().unwrap();
-        let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
-                                                        &el.handle(), 1).unwrap();
-        let web3 = web3::Web3::new(t);
-
-        let raw = hex::decode(settings.ethereum_private_key()).unwrap();
-        let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
-        let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-        let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
-
         let tx = web3.eth().gas_price().then(|gp| {
             web3.eth().transaction_count(H160::from_slice(a), None).then(|n| {
                 let tx = RawTransaction {
@@ -68,5 +72,30 @@ fn main() {
         log::info!("deployed contract: {:?}", txh);
         settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
         settings.write_repository_settings();
+    } else if let Some(_matches) = matches.subcommand_matches("anchor") {
+        let abi = ethabi::Contract::load(abi_json.as_bytes()).unwrap();
+        let f = abi.function("anchor").unwrap();
+        let r = Repository::open(".").unwrap();
+        let h = r.head().unwrap().target().unwrap();
+        log::info!("anchoring HEAD: {}", h);
+        let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
+
+        let tx = web3.eth().gas_price().then(|gp| {
+            web3.eth().transaction_count(H160::from_slice(a), None).then(|n| {
+                let to = H160::from_slice(&hex::decode(settings.contract_address()).unwrap());
+                let tx = RawTransaction {
+                    nonce: n.unwrap(),
+                    to: Some(to),
+                    value: U256::from(0),
+                    gas_price: gp.unwrap(),
+                    gas: U256::from(1000000), // TODO: estimate gas
+                    data: input,
+                };
+                let stx = tx.sign(&H256::from_slice(&raw), &settings.ethereum_chain_id());
+                send_raw_transaction_with_confirmation(web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
+            })
+        });
+
+        let _ = el.run(tx).unwrap();
     }
 }

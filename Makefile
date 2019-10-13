@@ -8,7 +8,7 @@ export GIT_AUDIT_EXE ?= $(shell pwd)/git-audit
 export ETHEREUM_RPC_PORT ?= 18545
 export ETHEREUM_RPC_TARGET ?= http://localhost:$(ETHEREUM_RPC_PORT)
 
-build: build-exe build-evm
+build: build-evm build-exe
 
 build-exe: $(GIT_AUDIT_EXE)
 .PHONY: $(GIT_AUDIT_EXE)

@@ -1,8 +1,13 @@
 pragma solidity ^0.5.11;
 
 contract GitAudit {
-    function commits() public pure returns (uint160[] memory) {
-        uint160[] memory x = new uint160[](0);
-        return x;
+    uint160[] _commits = new uint160[](0);
+
+    function anchor(uint160 commit) public {
+        _commits.push(commit);
+    }
+
+    function commits() public view returns (uint160[] memory) {
+        return _commits;
     }
 }

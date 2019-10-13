@@ -6,8 +6,11 @@ use std::io::prelude::*;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Ethereum {
+    #[serde(skip_serializing)]
     private_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     rpc_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     chain_id: Option<u8>,
 }
 
@@ -19,6 +22,7 @@ struct Contract {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsRoot {
+    #[serde(skip_serializing_if = "Option::is_none")]
     ethereum: Option<Ethereum>,
     contract: Option<Contract>,
 }
@@ -36,6 +40,8 @@ impl Settings {
             || dirs::config_dir().unwrap().join("git-audit.json")
         );
         let gp = gc_pb.as_path().to_str().unwrap();
+        log::debug!("reading config: global={} repository={}",
+                    gp, REPO_CONFIG_FILE);
 
         let mut g = Config::default();
         g.merge(config::File::new(gp, config::FileFormat::Json))?;
@@ -59,6 +65,10 @@ impl Settings {
 
     pub fn ethereum_chain_id(&self) -> &u8 {
         self.merged.ethereum.as_ref().and_then(|e| e.chain_id.as_ref()).unwrap()
+    }
+
+    pub fn contract_address(&self) -> &str {
+        self.merged.contract.as_ref().map(|c| c.address.as_str()).unwrap()
     }
 
     pub fn set_contract(&mut self, address: &str, abi: &str) -> &Self {

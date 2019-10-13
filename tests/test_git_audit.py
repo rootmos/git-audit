@@ -15,7 +15,7 @@ def run(args, cwd):
         cwd=cwd,
         env={
             "RUST_LOG": "git_audit",
-            "RUST_BACKTRACE": "1",
+            "RUST_BACKTRACE": os.getenv("RUST_BACKTRACE", default=""),
         }
     )
 
@@ -50,6 +50,16 @@ class GitAuditTests(unittest.TestCase):
             gc = mk_global_config(d)
             r = pygit2.init_repository(os.path.join(d, "repo"))
             tree = r.index.write_tree()
+            run([f"--global-config={gc}", "init"], cwd=r.path)
+
+            with open(os.path.join(r.path, ".git-audit.json")) as f:
+                c = json.loads(f.read())
+
+            contract = w3.eth.contract(
+                address = normalize(c["contract"]["address"]),
+                abi = c["contract"]["abi"],
+            )
+
             c0 = r.create_commit(
                 "refs/heads/master",
                 fresh.author(), fresh.committer(),
@@ -57,14 +67,9 @@ class GitAuditTests(unittest.TestCase):
                 tree, []
             )
 
-            run([f"--global-config={gc}", "init"], cwd=r.path)
+            run([f"--global-config={gc}", "anchor"], cwd=r.path)
 
-            with open(os.path.join(r.path, ".git-audit.json")) as f:
-                c = json.loads(f.read())
+            cs = list(map(lambda c: c.to_bytes(20, "big"),
+                contract.functions.commits().call()))
 
-        contract = w3.eth.contract(
-            address = normalize(c["contract"]["address"]),
-            abi = c["contract"]["abi"],
-        )
-
-        self.assertEqual(contract.functions.commits().call(), [c0])
+            self.assertEqual(cs, [c0.raw])
