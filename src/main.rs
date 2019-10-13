@@ -46,7 +46,20 @@ struct Context<'a, T: web3::Transport> {
     web3: &'a web3::Web3<T>,
 }
 
-fn init<'a, T: web3::Transport>(matches: &'a ArgMatches<'a>, ctx: &'a mut Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+impl <T: web3:: Transport> Context<'_, T> {
+    fn abi(self: &Self) -> ethabi::Contract {
+        ethabi::Contract::load(self.settings.contract_abi_json().as_bytes()).unwrap()
+    }
+
+    fn contract_address_h160(self: &Self) -> H160 {
+        H160::from_slice(&hex::decode(self.settings.contract_address()).unwrap())
+    }
+}
+
+fn init<'a, T: web3::Transport>(
+    matches: &'a ArgMatches<'a>,
+    ctx: &'a mut Context<'a, T>,
+) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
     let r = Repository::open(".").unwrap();
 
     let (a, sk) = private_key(&ctx.settings);
@@ -101,15 +114,14 @@ fn init<'a, T: web3::Transport>(matches: &'a ArgMatches<'a>, ctx: &'a mut Contex
     })
 }
 
-fn validate<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, _ctx: &'a Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
-    Box::new(web3::futures::future::ok(()))
-}
-
-fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+fn anchor<'a, T: web3::Transport>(
+    _matches: &'a ArgMatches<'a>,
+    ctx: &'a Context<'a, T>,
+) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
     let r = Repository::open(".").unwrap();
     let (a, sk) = private_key(&ctx.settings);
-    let abi = ethabi::Contract::load(ctx.settings.contract_abi_json().as_bytes()).unwrap();
-    let f = abi.function("anchor").unwrap();
+    let c = ctx.abi();
+    let f = c.function("anchor").unwrap();
     let h = r.head().unwrap().target().unwrap();
     log::info!("anchoring HEAD: {}", h);
     let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
@@ -117,10 +129,9 @@ fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context
     Box::new(mdo! {
         gp =<< ctx.web3.eth().gas_price();
         n =<< ctx.web3.eth().transaction_count(a, None);
-        let to = H160::from_slice(&hex::decode(ctx.settings.contract_address()).unwrap());
         let tx = RawTransaction {
             nonce: n,
-            to: Some(to),
+            to: Some(ctx.contract_address_h160()),
             value: U256::from(0),
             gas_price: gp,
             gas: U256::from(1000000), // TODO: estimate gas
@@ -128,6 +139,35 @@ fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context
         }.sign(&sk, &ctx.settings.ethereum_chain_id());
         _ =<< send_raw_transaction_with_confirmation(
             ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+        ret ret(())
+    })
+}
+
+fn validate<'a, T: web3::Transport>(
+    _matches: &'a ArgMatches<'a>,
+    ctx: &'a Context<'a, T>,
+) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+    let c = ctx.abi();
+    let f = c.function("commits").unwrap();
+    let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
+    let cr = web3::types::CallRequest {
+        from: None,
+        to: ctx.contract_address_h160(),
+        gas: None,
+        gas_price: None,
+        value: None,
+        data,
+    };
+
+    Box::new(mdo! {
+        Bytes(rsp) =<< ctx.web3.eth().call(cr, None);
+        let ts = c.function("commits").unwrap().decode_output(&rsp).unwrap();
+        let () = match ts.as_slice() {
+            [ethabi::Token::Array(cs)] => {
+                log::debug!("commits response: {:?}", cs)
+            },
+            _ => panic!("whoops!"),
+        };
         ret ret(())
     })
 }
