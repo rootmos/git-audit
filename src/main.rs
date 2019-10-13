@@ -1,5 +1,9 @@
 use std::time::Duration;
 
+#[macro_use] extern crate mdo;
+extern crate mdo_future;
+use mdo_future::future::{bind, ret};
+
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
 extern crate tokio_core;
@@ -50,54 +54,55 @@ fn init<'a, T: web3::Transport>(matches: &'a ArgMatches<'a>, ctx: &'a mut Contex
     let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
     let abi_json = include_str!("../build/evm/GitAudit.abi");
 
-    let f = ctx.web3.eth().gas_price().then(move |gp| {
-        ctx.web3.eth().transaction_count(a, None).then(move |n| {
-            let tx = RawTransaction {
-                nonce: n.unwrap(),
-                to: None,
-                value: U256::from(0),
-                gas_price: gp.unwrap(),
-                gas: U256::from(1000000), // TODO: estimate gas
-                data: code,
+    Box::new(mdo! {
+        gp =<< ctx.web3.eth().gas_price();
+        n =<< ctx.web3.eth().transaction_count(a, None);
+        let tx = RawTransaction {
+            nonce: n,
+            to: None,
+            value: U256::from(0),
+            gas_price: gp,
+            gas: U256::from(1000000), // TODO: estimate gas
+            data: code,
+        }.sign(&sk, &ctx.settings.ethereum_chain_id());
+        rc =<< send_raw_transaction_with_confirmation(
+            ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+        let txh = rc.contract_address.unwrap();
+        let () = log::info!("deployed contract: {:?}", txh);
+        let _ = ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
+        let () = ctx.settings.write_repository_settings();
+        let () = if ! matches.is_present("no-commit") {
+            let p = if r.is_empty().unwrap() { None } else {
+                Some(r.head().unwrap().peel_to_commit().unwrap())
             };
-            let stx = tx.sign(&sk, &ctx.settings.ethereum_chain_id());
-            send_raw_transaction_with_confirmation(ctx.web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
-                .map(|r| r.contract_address.unwrap()).map(move |txh| {
-                    log::info!("deployed contract: {:?}", txh);
-                    ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
-                    ctx.settings.write_repository_settings();
 
-                    if ! matches.is_present("no-commit") {
-                        let p = if r.is_empty().unwrap() { None } else {
-                            Some(r.head().unwrap().peel_to_commit().unwrap())
-                        };
+            let mut tb = match &p {
+                Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
+                None => r.treebuilder(None).unwrap(),
+            };
 
-                        let mut tb = match &p {
-                            Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
-                            None => r.treebuilder(None).unwrap(),
-                        };
+            tb.insert(
+                settings::repository_config_file(),
+                r.blob_path(settings::repository_config_file()).unwrap(),
+                0o100644,
+            ).unwrap();
+            let t = tb.write().unwrap();
 
-                        tb.insert(
-                            settings::repository_config_file(),
-                            r.blob_path(settings::repository_config_file()).unwrap(),
-                            0o100644,
-                        ).unwrap();
-                        let t = tb.write().unwrap();
+            let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
+            let c = r.commit(Some("HEAD"), &s, &s,
+                "Initializing git-audit",
+                &r.find_tree(t).unwrap(),
+                &p.iter().collect::<Vec<_>>(),
+            ).unwrap();
 
-                        let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
-                        let c = r.commit(Some("HEAD"), &s, &s,
-                            "Initializing git-audit",
-                            &r.find_tree(t).unwrap(),
-                            &p.iter().collect::<Vec<_>>(),
-                        ).unwrap();
+            log::info!("committed git-audit repository config: {}", c);
+        };
+        ret ret(())
+    })
+}
 
-                        log::info!("committed git-audit repository config: {}", c);
-                    };
-                })
-        })
-    });
-
-    Box::new(f)
+fn validate<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, _ctx: &'a Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+    Box::new(web3::futures::future::ok(()))
 }
 
 fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context<'a, T>) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
@@ -109,23 +114,22 @@ fn anchor<'a, T: web3::Transport>(_matches: &'a ArgMatches<'a>, ctx: &'a Context
     log::info!("anchoring HEAD: {}", h);
     let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
 
-    let f = ctx.web3.eth().gas_price().then(move |gp| {
-        ctx.web3.eth().transaction_count(a, None).then(move |n| {
-            let to = H160::from_slice(&hex::decode(ctx.settings.contract_address()).unwrap());
-            let tx = RawTransaction {
-                nonce: n.unwrap(),
-                to: Some(to),
-                value: U256::from(0),
-                gas_price: gp.unwrap(),
-                gas: U256::from(1000000), // TODO: estimate gas
-                data: input,
-            };
-            let stx = tx.sign(&sk, &ctx.settings.ethereum_chain_id());
-            send_raw_transaction_with_confirmation(ctx.web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
-        })
-    }).map(|_| ());
-
-    Box::new(f)
+    Box::new(mdo! {
+        gp =<< ctx.web3.eth().gas_price();
+        n =<< ctx.web3.eth().transaction_count(a, None);
+        let to = H160::from_slice(&hex::decode(ctx.settings.contract_address()).unwrap());
+        let tx = RawTransaction {
+            nonce: n,
+            to: Some(to),
+            value: U256::from(0),
+            gas_price: gp,
+            gas: U256::from(1000000), // TODO: estimate gas
+            data: input,
+        }.sign(&sk, &ctx.settings.ethereum_chain_id());
+        _ =<< send_raw_transaction_with_confirmation(
+            ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+        ret ret(())
+    })
 }
 
 fn main() {
@@ -153,8 +157,10 @@ fn main() {
         init(matches, &mut ctx)
     } else if let Some(matches) = matches.subcommand_matches("anchor") {
         anchor(matches, &ctx)
+    } else if let Some(matches) = matches.subcommand_matches("validate") {
+        validate(matches, &ctx)
     } else {
-        Box::new(web3::futures::future::ok(()))
+        panic!("invalid subcommand match");
     };
 
     let () = el.run(f).unwrap();
