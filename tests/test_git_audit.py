@@ -18,9 +18,11 @@ class test_env:
     def __enter__(self):
         self.root = tempfile.TemporaryDirectory()
         self.global_config = os.path.join(self.root.name, "global.json")
-        rp = os.path.join(self.root.name, "repo")
-        if self.master is None: self.repo = pygit2.init_repository(rp, bare=True)
-        else: self.repo = pygit2.clone_repository(self.master.repo.path, rp)
+        self.path = os.path.join(self.root.name, "repo-" + fresh.salt(5))
+        if self.master is None:
+            self.repo = pygit2.init_repository(self.path)
+        else:
+            self.repo = pygit2.clone_repository(self.master.repo.path, self.path)
 
         self.config = self.master.config if self.master else {
             "ethereum": {
@@ -53,9 +55,10 @@ class test_env:
         if os.getenv("RUST_BACKTRACE") is not None:
             env["RUST_BACKTRACE"] = os.getenv("RUST_BACKTRACE")
 
+        print("executing: ", [self.exe, f"--global-config={self.global_config}"] + args)
         subprocess.check_call(
             [self.exe, f"--global-config={self.global_config}"] + args,
-            cwd=self.repo.path,
+            cwd=self.path,
             env=env,
         )
 
@@ -73,7 +76,7 @@ class test_env:
         )
 
     def inspect(self):
-        return GitAudit(self.repo.path)
+        return GitAudit(self.path)
 
     @property
     def commits(self, oid=None):
@@ -109,7 +112,7 @@ class GitAuditTests(unittest.TestCase):
 
     def test_anchor(self):
         with test_env() as te:
-            te.run(["init"])
+            te.run(["init", "--no-commit"])
 
             te.commit()
             te.run(["anchor"])
@@ -118,7 +121,7 @@ class GitAuditTests(unittest.TestCase):
 
     def test_anchor_twice(self):
         with test_env() as te:
-            te.run(["init"])
+            te.run(["init", "--no-commit"])
 
             te.commit()
             te.run(["anchor"])
@@ -128,13 +131,11 @@ class GitAuditTests(unittest.TestCase):
 
             self.assertEqual(te.inspect().commits, te.commits)
 
-    @unittest.skip("TOOD: commit config in init subcommand")
     def test_anchor_in_downstream(self):
         with test_env() as te0:
             te0.run(["init"])
 
             with test_env(te0) as te1:
-                te1.commit()
                 te1.run(["anchor"])
 
     def test_validate_empty_repo(self):

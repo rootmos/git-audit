@@ -12,7 +12,7 @@ extern crate ethabi;
 extern crate primitive_types;
 
 extern crate git2;
-use git2::Repository;
+use git2::{Repository, Signature};
 
 extern crate clap;
 use clap::{Arg, App, SubCommand};
@@ -44,7 +44,9 @@ fn main() {
         .version("0.1.0")
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
-        .subcommand(SubCommand::with_name("init"))
+        .subcommand(SubCommand::with_name("init")
+            .arg(Arg::with_name("no-commit").long("no-commit"))
+        )
         .subcommand(SubCommand::with_name("anchor"))
         .subcommand(SubCommand::with_name("validate"))
         .get_matches();
@@ -56,7 +58,9 @@ fn main() {
                                                     &el.handle(), 1).unwrap();
     let web3 = web3::Web3::new(t);
 
-    if let Some(_matches) = matches.subcommand_matches("init") {
+    if let Some(matches) = matches.subcommand_matches("init") {
+        let r = Repository::open(".").unwrap();
+
         let (a, sk) = private_key(&settings);
 
         let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
@@ -81,11 +85,32 @@ fn main() {
         log::info!("deployed contract: {:?}", txh);
         settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
         settings.write_repository_settings();
+
+        if ! matches.is_present("no-commit") {
+            let mut tb = r.treebuilder(None).unwrap();
+            tb.insert(
+                settings::repository_config_file(),
+                r.blob_path(settings::repository_config_file()).unwrap(),
+                0o100644,
+            ).unwrap();
+            let t = tb.write().unwrap();
+
+            let c = r.commit(
+                Some("HEAD"),
+                &Signature::now("git-audit", "git-audit@rootmos.io").unwrap(),
+                &Signature::now("git-audit", "git-audit@rootmos.io").unwrap(),
+                "Initializing git-audit",
+                &r.find_tree(t).unwrap(),
+                &[],
+            ).unwrap();
+
+            log::info!("committed git-audit repository config: {}", c);
+        }
     } else if let Some(_matches) = matches.subcommand_matches("anchor") {
+        let r = Repository::open(".").unwrap();
         let (a, sk) = private_key(&settings);
         let abi = ethabi::Contract::load(settings.contract_abi_json().as_bytes()).unwrap();
         let f = abi.function("anchor").unwrap();
-        let r = Repository::open(".").unwrap();
         let h = r.head().unwrap().target().unwrap();
         log::info!("anchoring HEAD: {}", h);
         let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
