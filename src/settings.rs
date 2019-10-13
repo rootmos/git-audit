@@ -71,6 +71,11 @@ impl Settings {
         self.merged.contract.as_ref().map(|c| c.address.as_str()).unwrap()
     }
 
+    pub fn contract_abi_json(&self) -> String {
+        self.merged.contract.as_ref()
+            .and_then(|c| serde_json::to_string(&c.abi).ok()).unwrap()
+    }
+
     pub fn set_contract(&mut self, address: &str, abi: &str) -> &Self {
         let abi_j: serde_json::Value = serde_json::from_str(abi).unwrap();
         self.repository.contract = Some(Contract {

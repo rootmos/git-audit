@@ -26,6 +26,16 @@ use web3::futures::Future;
 use web3::confirm::send_raw_transaction_with_confirmation;
 
 mod settings;
+use settings::Settings;
+
+fn private_key(s: &Settings) -> (H160, H256) {
+    let raw = hex::decode(s.ethereum_private_key()).unwrap();
+    let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
+    let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
+    let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
+    log::debug!("using address: {}", hex::encode(a));
+    (H160::from_slice(a), H256::from_slice(&raw))
+}
 
 fn main() {
     env_logger::init();
@@ -39,23 +49,21 @@ fn main() {
         .subcommand(SubCommand::with_name("validate"))
         .get_matches();
 
-    let mut settings = settings::Settings::new(matches.value_of("global-config")).unwrap();
-
-    let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
-    let abi_json = include_str!("../build/evm/GitAudit.abi");
+    let mut settings = Settings::new(matches.value_of("global-config")).unwrap();
 
     let mut el = tokio_core::reactor::Core::new().unwrap();
     let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
                                                     &el.handle(), 1).unwrap();
     let web3 = web3::Web3::new(t);
-    let raw = hex::decode(settings.ethereum_private_key()).unwrap();
-    let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
-    let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-    let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
 
     if let Some(_matches) = matches.subcommand_matches("init") {
+        let (a, sk) = private_key(&settings);
+
+        let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
+        let abi_json = include_str!("../build/evm/GitAudit.abi");
+
         let tx = web3.eth().gas_price().then(|gp| {
-            web3.eth().transaction_count(H160::from_slice(a), None).then(|n| {
+            web3.eth().transaction_count(a, None).then(|n| {
                 let tx = RawTransaction {
                     nonce: n.unwrap(),
                     to: None,
@@ -64,7 +72,7 @@ fn main() {
                     gas: U256::from(1000000), // TODO: estimate gas
                     data: code,
                 };
-                let stx = tx.sign(&H256::from_slice(&raw), &settings.ethereum_chain_id());
+                let stx = tx.sign(&sk, &settings.ethereum_chain_id());
                 send_raw_transaction_with_confirmation(web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
             }).map(|r| r.contract_address.unwrap())
         });
@@ -74,7 +82,8 @@ fn main() {
         settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
         settings.write_repository_settings();
     } else if let Some(_matches) = matches.subcommand_matches("anchor") {
-        let abi = ethabi::Contract::load(abi_json.as_bytes()).unwrap();
+        let (a, sk) = private_key(&settings);
+        let abi = ethabi::Contract::load(settings.contract_abi_json().as_bytes()).unwrap();
         let f = abi.function("anchor").unwrap();
         let r = Repository::open(".").unwrap();
         let h = r.head().unwrap().target().unwrap();
@@ -82,7 +91,7 @@ fn main() {
         let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
 
         let tx = web3.eth().gas_price().then(|gp| {
-            web3.eth().transaction_count(H160::from_slice(a), None).then(|n| {
+            web3.eth().transaction_count(a, None).then(|n| {
                 let to = H160::from_slice(&hex::decode(settings.contract_address()).unwrap());
                 let tx = RawTransaction {
                     nonce: n.unwrap(),
@@ -92,7 +101,7 @@ fn main() {
                     gas: U256::from(1000000), // TODO: estimate gas
                     data: input,
                 };
-                let stx = tx.sign(&H256::from_slice(&raw), &settings.ethereum_chain_id());
+                let stx = tx.sign(&sk, &settings.ethereum_chain_id());
                 send_raw_transaction_with_confirmation(web3.transport(), Bytes::from(stx), Duration::new(1, 0), 0)
             })
         });
