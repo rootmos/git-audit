@@ -206,13 +206,22 @@ fn main() {
 
     let matches = &App::new("git-audit")
         .version("0.1.0")
+        .about("Manages an audit trail for a git repository")
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
-        .subcommand(SubCommand::with_name("init")
-            .arg(Arg::with_name("no-commit").long("no-commit"))
+        .subcommand(
+            SubCommand::with_name("init")
+                .about("Deploys a Ethereum smart contract to collect the audit trail")
+                .arg(Arg::with_name("no-commit").long("no-commit"))
         )
-        .subcommand(SubCommand::with_name("anchor"))
-        .subcommand(SubCommand::with_name("validate"))
+        .subcommand(
+            SubCommand::with_name("anchor")
+                .about("Anchors a commit in the audit trail")
+        )
+        .subcommand(
+            SubCommand::with_name("validate")
+                .about("Validates the audit trail")
+        )
         .get_matches();
 
     let settings = &mut Settings::new(matches.value_of("global-config")).unwrap();

@@ -24,6 +24,9 @@ build-evm:
 test:
 	$(MAKE) -C tests
 
+docs: build
+	./readme.sh > README.md
+
 clean:
 	rm -rf "$(BUILD)"
 	$(MAKE) -C tests clean
@@ -40,5 +43,5 @@ stop:
 	$(DOCKER_COMPOSE) stop
 	yes | $(DOCKER_COMPOSE) rm
 
-.PHONY: build build-exe build-evm test clean
+.PHONY: build build-exe build-evm test docs clean
 .PHONY: run-services stop
