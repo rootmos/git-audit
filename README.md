@@ -1,5 +1,7 @@
 # git-audit
 
+[![Build Status](https://travis-ci.org/rootmos/git-audit.svg?branch=master)](https://travis-ci.org/rootmos/git-audit)
+
 ```
 git-audit 0.1.0
 Gustav Behm <me@rootmos.io>
