@@ -32,18 +32,10 @@ use web3::confirm::send_raw_transaction_with_confirmation;
 mod settings;
 use settings::Settings;
 
-fn private_key(s: &Settings) -> (H160, H256) {
-    let raw = hex::decode(s.ethereum_private_key()).unwrap();
-    let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
-    let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-    let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
-    log::debug!("using address: {}", hex::encode(a));
-    (H160::from_slice(a), H256::from_slice(&raw))
-}
-
 struct Context<'a, T: web3::Transport> {
     settings: &'a mut Settings,
     web3: &'a web3::Web3<T>,
+    repo: &'a Repository,
 }
 
 impl <T: web3:: Transport> Context<'_, T> {
@@ -54,15 +46,22 @@ impl <T: web3:: Transport> Context<'_, T> {
     fn contract_address_h160(self: &Self) -> H160 {
         H160::from_slice(&hex::decode(self.settings.contract_address()).unwrap())
     }
+
+    fn private_key(self: &Self) -> (H160, H256) {
+        let raw = hex::decode(self.settings.ethereum_private_key()).unwrap();
+        let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
+        let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
+        let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
+        log::debug!("using address: {}", hex::encode(a));
+        (H160::from_slice(a), H256::from_slice(&raw))
+    }
 }
 
 fn init<'a, T: web3::Transport>(
     matches: &'a ArgMatches<'a>,
     ctx: &'a mut Context<'a, T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    let r = Repository::open(".").unwrap();
-
-    let (a, sk) = private_key(&ctx.settings);
+    let (a, sk) = ctx.private_key();
 
     let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
     let abi_json = include_str!("../build/evm/GitAudit.abi");
@@ -85,26 +84,26 @@ fn init<'a, T: web3::Transport>(
         let _ = ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
         let () = ctx.settings.write_repository_settings();
         let () = if ! matches.is_present("no-commit") {
-            let p = if r.is_empty().unwrap() { None } else {
-                Some(r.head().unwrap().peel_to_commit().unwrap())
+            let p = if ctx.repo.is_empty().unwrap() { None } else {
+                Some(ctx.repo.head().unwrap().peel_to_commit().unwrap())
             };
 
             let mut tb = match &p {
-                Some(pc) => r.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
-                None => r.treebuilder(None).unwrap(),
+                Some(pc) => ctx.repo.treebuilder(Some(&pc.tree().unwrap())).unwrap(),
+                None => ctx.repo.treebuilder(None).unwrap(),
             };
 
             tb.insert(
                 settings::repository_config_file(),
-                r.blob_path(settings::repository_config_file()).unwrap(),
+                ctx.repo.blob_path(settings::repository_config_file()).unwrap(),
                 0o100644,
             ).unwrap();
             let t = tb.write().unwrap();
 
             let s = Signature::now("git-audit", "git-audit@rootmos.io").unwrap();
-            let c = r.commit(Some("HEAD"), &s, &s,
+            let c = ctx.repo.commit(Some("HEAD"), &s, &s,
                 "Initializing git-audit",
-                &r.find_tree(t).unwrap(),
+                &ctx.repo.find_tree(t).unwrap(),
                 &p.iter().collect::<Vec<_>>(),
             ).unwrap();
 
@@ -118,10 +117,9 @@ fn anchor<'a, T: web3::Transport>(
     _matches: &'a ArgMatches<'a>,
     ctx: &'a Context<'a, T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    let r = Repository::open(".").unwrap();
-    let (a, sk) = private_key(&ctx.settings);
+    let (a, sk) = ctx.private_key();
     let f = ctx.abi().function("anchor").unwrap().to_owned();
-    let h = r.head().unwrap().target().unwrap();
+    let h = ctx.repo.head().unwrap().target().unwrap();
     log::info!("anchoring HEAD: {}", h);
     let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
 
@@ -146,7 +144,6 @@ fn validate<'a, T: web3::Transport>(
     _matches: &'a ArgMatches<'a>,
     ctx: &'a Context<'a, T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    let r = Repository::open(".").unwrap();
     let f = ctx.abi().function("commits").unwrap().to_owned();
     let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
     let cr = web3::types::CallRequest {
@@ -175,7 +172,7 @@ fn validate<'a, T: web3::Transport>(
             _ => panic!("unexpected return types from contract function"),
         };
         let cs_repo = {
-            let mut w = r.revwalk().unwrap();
+            let mut w = ctx.repo.revwalk().unwrap();
             w.push_head().unwrap();
             w.map(|i| i.unwrap().as_bytes().to_owned()).collect::<Vec<_>>()
         };
@@ -223,7 +220,8 @@ fn main() {
     let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
                                                     &el.handle(), 1).unwrap();
     let web3 = &web3::Web3::new(t);
-    let mut ctx = Context { settings, web3, };
+    let repo = &Repository::open(".").unwrap();
+    let mut ctx = Context { settings, web3, repo };
 
     let f = if let Some(matches) = matches.subcommand_matches("init") {
         init(matches, &mut ctx)
