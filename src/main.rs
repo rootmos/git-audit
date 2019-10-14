@@ -59,7 +59,7 @@ impl <T: web3:: Transport> Context<'_, T> {
 fn init<'a, T: web3::Transport>(
     matches: &'a ArgMatches<'a>,
     ctx: &'a mut Context<'a, T>,
-) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let r = Repository::open(".").unwrap();
 
     let (a, sk) = private_key(&ctx.settings);
@@ -110,18 +110,17 @@ fn init<'a, T: web3::Transport>(
 
             log::info!("committed git-audit repository config: {}", c);
         };
-        ret ret(())
+        ret ret(0)
     })
 }
 
 fn anchor<'a, T: web3::Transport>(
     _matches: &'a ArgMatches<'a>,
     ctx: &'a Context<'a, T>,
-) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
+) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let r = Repository::open(".").unwrap();
     let (a, sk) = private_key(&ctx.settings);
-    let c = ctx.abi();
-    let f = c.function("anchor").unwrap();
+    let f = ctx.abi().function("anchor").unwrap().to_owned();
     let h = r.head().unwrap().target().unwrap();
     log::info!("anchoring HEAD: {}", h);
     let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
@@ -139,16 +138,16 @@ fn anchor<'a, T: web3::Transport>(
         }.sign(&sk, &ctx.settings.ethereum_chain_id());
         _ =<< send_raw_transaction_with_confirmation(
             ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
-        ret ret(())
+        ret ret(0)
     })
 }
 
 fn validate<'a, T: web3::Transport>(
     _matches: &'a ArgMatches<'a>,
     ctx: &'a Context<'a, T>,
-) -> Box<dyn Future<Item=(), Error=web3::Error> + 'a> {
-    let c = ctx.abi();
-    let f = c.function("commits").unwrap();
+) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
+    let r = Repository::open(".").unwrap();
+    let f = ctx.abi().function("commits").unwrap().to_owned();
     let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
     let cr = web3::types::CallRequest {
         from: None,
@@ -161,14 +160,47 @@ fn validate<'a, T: web3::Transport>(
 
     Box::new(mdo! {
         Bytes(rsp) =<< ctx.web3.eth().call(cr, None);
-        let ts = c.function("commits").unwrap().decode_output(&rsp).unwrap();
-        let () = match ts.as_slice() {
-            [ethabi::Token::Array(cs)] => {
-                log::debug!("commits response: {:?}", cs)
+        let cs_contract = match &f.decode_output(&rsp).unwrap()[..] {
+            [ethabi::Token::Array(ts)] => {
+                let mut cs = vec![];
+                for t in ts.iter() {
+                    if let ethabi::Token::Uint(ui) = t {
+                        let mut buf = vec![0; 32];
+                        ui.to_big_endian(&mut buf);
+                        cs.push(buf.split_off(12))
+                    }
+                }
+                cs
             },
-            _ => panic!("whoops!"),
+            _ => panic!("unexpected return types from contract function"),
         };
-        ret ret(())
+        let cs_repo = {
+            let mut w = r.revwalk().unwrap();
+            w.push_head().unwrap();
+            w.map(|i| i.unwrap().as_bytes().to_owned()).collect::<Vec<_>>()
+        };
+        let () = if log::log_enabled!(log::Level::Debug) {
+            for c in &cs_contract { log::debug!("contract commit: {}", hex::encode(c)) }
+            for c in &cs_repo { log::debug!("repository commit: {}", hex::encode(c)) }
+        };
+        ret ret({
+            let mut good = 0;
+            let mut bad = 0;
+
+            for c in cs_contract.iter() {
+                if cs_repo.contains(&c) {
+                    good += 1;
+                    log::debug!("commit present in repository: {}", hex::encode(c))
+                } else {
+                    bad += 1;
+                    log::warn!("commit not present in repository: {}", hex::encode(c))
+                };
+            }
+
+            log::info!("validation result: good={} bad={}", good, bad);
+
+            if bad > 0 { 1 } else { 0 }
+        })
     })
 }
 
@@ -200,8 +232,9 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("validate") {
         validate(matches, &ctx)
     } else {
-        panic!("invalid subcommand match");
+        panic!("invalid subcommand match")
     };
 
-    let () = el.run(f).unwrap();
+    let ec = el.run(f).unwrap();
+    std::process::exit(ec);
 }

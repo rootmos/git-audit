@@ -78,11 +78,14 @@ class test_env:
             env["RUST_BACKTRACE"] = os.getenv("RUST_BACKTRACE")
 
         print("executing: ", [self.exe, f"--global-config={self.global_config}"] + args)
-        subprocess.check_call(
+        p = subprocess.run(
             [self.exe, f"--global-config={self.global_config}"] + args,
             cwd=self.path,
             env=env,
         )
+        if p.returncode == 1: return False
+        elif p.returncode == 0: return True
+        else: p.check_returncode()
 
     def file(self, name=None):
         return Content(self.path,
@@ -193,7 +196,14 @@ class GitAuditTests(unittest.TestCase):
             for _ in range(1, random.randint(1, 10)): te.commit()
             te.run(["validate"])
 
-    @unittest.skip("not implemented yet")
+    def test_validate_cloned_repo(self):
+        with test_env() as te0:
+            te0.run(["init"])
+            te0.run(["anchor"])
+
+            with test_env(te0) as te1:
+                te1.run(["validate"])
+
     def test_validate_reject(self):
         with test_env() as te0:
             te0.run(["init"])
@@ -204,5 +214,16 @@ class GitAuditTests(unittest.TestCase):
                 te0.run(["anchor"])
 
                 # not present in downstream repo => validation failure
-                with self.assertRaises(Exception):
-                    te1.run(["validate"])
+                self.assertFalse(te1.run(["validate"]))
+
+    def test_validate_reject(self):
+        with test_env() as te0:
+            te0.run(["init"])
+
+            with test_env(te0) as te1:
+                # anchor a commit in the downstream repo
+                te1.commit()
+                te1.run(["anchor"])
+
+            # not present in upstream repo => validation failure
+            self.assertFalse(te0.run(["validate"]))
