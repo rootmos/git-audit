@@ -1,10 +1,15 @@
 import random
+import string
 import pygit2
 
 from . import faucets, to_address
 
 def bs(n):
     return bytes(random.getrandbits(8) for _ in range(n))
+
+def salt(n=5):
+    alphabeth = string.ascii_lowercase
+    return ''.join(random.choice(alphabeth) for i in range(n))
 
 def author():
     return pygit2.Signature("Foo the author", "foo@authors.test")
