@@ -1,7 +1,7 @@
 import unittest
 import random
 
-from . import w3
+from . import w3, fresh
 from .test_env import test_env
 
 class GitAuditTests(unittest.TestCase):
@@ -91,3 +91,11 @@ class GitAuditTests(unittest.TestCase):
 
             # not present in upstream repo => validation failure
             self.assertFalse(te0.run(["validate"]))
+
+    def test_ownership(self):
+        with test_env() as te0:
+            te0.run(["init"])
+
+            with test_env(te0, owner_key=fresh.private_key(fresh.mether())) as te1:
+                te1.run(["anchor"])
+                self.assertNotEqual(te1.inspect().commits, te1.commits)

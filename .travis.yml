@@ -1,3 +1,3 @@
 services:
   - docker
-script: make test-compose
+script: make test-compose VERBOSE=1

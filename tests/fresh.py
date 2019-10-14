@@ -1,6 +1,7 @@
 import random
 import string
 import pygit2
+import web3
 
 from . import faucets, to_address
 
@@ -19,6 +20,9 @@ def committer():
 
 def commit_msg():
     return "Hello committed world!"
+
+def mether():
+    return web3.Web3.toWei(random.randint(1, 1000), 'milli');
 
 def private_key(balance = None):
     pk = bs(32)

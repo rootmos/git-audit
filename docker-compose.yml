@@ -13,6 +13,7 @@ services:
       - ethereum
     environment:
       ETHEREUM_RPC_TARGET: http://ethereum:18545
+      VERBOSE: ${VERBOSE-}
     networks:
       - testnet
 

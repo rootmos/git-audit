@@ -62,7 +62,7 @@ class test_env:
         else:
             self.repo = pygit2.clone_repository(self.master.repo.path, self.path)
 
-        self.config = self.master.config if self.master else {
+        self.config = {
             "ethereum": {
                 "private_key": self.owner_key.hex(),
                 "rpc_target": ethereum_rpc_target,
