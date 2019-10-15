@@ -5,6 +5,8 @@ export PYTHON = $(VENV)/bin/python3
 export PIP = $(VENV)/bin/pip
 export PYTEST = $(VENV)/bin/pytest
 
+PYTEST_OPTS ?= --workers=auto
+
 ifneq ($(VERBOSE),)
 PYTEST_OPTS += --verbose
 else

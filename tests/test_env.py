@@ -52,7 +52,7 @@ class GitAudit:
 class test_env:
     def __init__(self, master=None, owner_key=None):
         self.master = master
-        self.owner_key = owner_key or master.owner_key if master else faucets.key()
+        self.owner_key = owner_key or master.owner_key if master else fresh.private_key(fresh.mether())
         self.exe = os.getenv("GIT_AUDIT_EXE")
 
     def __enter__(self):
