@@ -39,9 +39,9 @@ mod loggers;
 use loggers::UnixSocketLogger;
 
 struct Context<'a, T: web3::Transport> {
-    settings: &'a mut Settings,
+    settings: Settings,
     web3: &'a web3::Web3<T>,
-    repo: &'a Repository,
+    repo: Repository,
 }
 
 impl <T: web3:: Transport> Context<'_, T> {
@@ -64,8 +64,8 @@ impl <T: web3:: Transport> Context<'_, T> {
 }
 
 fn init<'a, T: web3::Transport>(
-    matches: &'a ArgMatches<'a>,
-    ctx: &'a mut Context<'a, T>,
+    matches: &'a ArgMatches,
+    ctx: &'a mut Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let (a, sk) = ctx.private_key();
 
@@ -121,8 +121,8 @@ fn init<'a, T: web3::Transport>(
 }
 
 fn anchor<'a, T: web3::Transport>(
-    _matches: &'a ArgMatches<'a>,
-    ctx: &'a Context<'a, T>,
+    _matches: &'a ArgMatches,
+    ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let (a, sk) = ctx.private_key();
     let f = ctx.abi().function("anchor").unwrap().to_owned();
@@ -148,8 +148,8 @@ fn anchor<'a, T: web3::Transport>(
 }
 
 fn validate<'a, T: web3::Transport>(
-    _matches: &'a ArgMatches<'a>,
-    ctx: &'a Context<'a, T>,
+    _matches: &'a ArgMatches,
+    ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let f = ctx.abi().function("commits").unwrap().to_owned();
     let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
@@ -230,7 +230,7 @@ fn run() -> i32 {
         )
         .get_matches();
 
-    let settings = &mut Settings::new(matches.value_of("global-config")).unwrap();
+    let settings = Settings::new(matches.value_of("global-config")).unwrap();
 
     if let Some(fp) = settings.log_file_path() {
         let logger = UnixSocketLogger::new(fp).unwrap();
@@ -243,10 +243,13 @@ fn run() -> i32 {
     let mut el = tokio_core::reactor::Core::new().unwrap();
     let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
                                                     &el.handle(), 1).unwrap();
-    let web3 = &web3::Web3::new(t);
+    let web3 = web3::Web3::new(t);
     let repo_path = matches.value_of("repository").unwrap_or(".");
     let repo = match Repository::open(repo_path) {
-        Ok(r) => r,
+        Ok(r) => {
+            info!("working with repository at: {:?}", r.path());
+            r
+        },
         Err(ref e) if e.code() == git2::ErrorCode::NotFound
             && e.class() == git2::ErrorClass::Repository => {
             debug!("unable to open repository: {}", e.message());
@@ -256,7 +259,7 @@ fn run() -> i32 {
         Err(ref e) => panic!("unable to open repository: {}", e),
     };
 
-    let mut ctx = Context { settings, web3, repo: &repo, };
+    let mut ctx = Context { settings, web3: &web3, repo };
 
     let f = if let Some(matches) = matches.subcommand_matches("init") {
         init(matches, &mut ctx)
