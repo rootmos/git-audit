@@ -3,6 +3,8 @@ import tempfile
 import pygit2
 import json
 import subprocess
+import socket
+import threading
 
 from . import fresh, w3, faucets, ethereum_rpc_target, normalize
 
@@ -54,26 +56,50 @@ class test_env:
         self.exe = os.getenv("GIT_AUDIT_EXE")
 
     def __enter__(self):
-        self.root = tempfile.TemporaryDirectory()
-        self.global_config = os.path.join(self.root.name, "global.json")
-        self.path = os.path.join(self.root.name, "repo-" + fresh.salt(5))
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.global_config = os.path.join(self.root, "global.json")
+        self.path = os.path.join(self.root, "repo-" + fresh.salt(5))
         if self.master is None:
             self.repo = pygit2.init_repository(self.path)
         else:
             self.repo = pygit2.clone_repository(self.master.repo.path, self.path)
+
+        self.log_file_path = os.path.join(self.root, "log")
+        self.log_thread = threading.Thread(target=self._log_reader)
+        self.log_thread.start()
 
         self.config = {
             "ethereum": {
                 "private_key": self.owner_key.hex(),
                 "rpc_target": ethereum_rpc_target,
                 "chain_id": w3.eth.chainId,
-            }
+            },
+            "logging": {
+                "file": self.log_file_path,
+            },
         }
 
         return self
 
     def __exit__(self, type, value, traceback):
-        self.root.cleanup()
+        self.tmp.cleanup()
+        self.log_thread.join()
+
+    def _log_reader(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.bind(self.log_file_path)
+            s.settimeout(0.2)
+            while os.path.exists(self.log_file_path):
+                try:
+                    bs, _ = s.recvfrom(4096)
+                    self._log_entry(json.loads(bs))
+                except socket.timeout:
+                    pass
+
+    def _log_entry(self, l):
+        if l["level"]["numeric"] < 2 or l["target"] == "git_audit":
+            print(f"{l['time']} {l['level']['label']} {l['message']}")
 
     @property
     def config(self):
@@ -86,7 +112,7 @@ class test_env:
         with open(self.global_config, "w") as f:
             f.write(json.dumps(self._config))
 
-    def run(self, args):
+    def run(self, args, expect_exit_code=0, capture_output=False, cwd=None):
         env = {
             "RUST_LOG": "git_audit",
         }
@@ -94,14 +120,29 @@ class test_env:
             env["RUST_BACKTRACE"] = os.getenv("RUST_BACKTRACE")
 
         print("executing: ", [self.exe, f"--global-config={self.global_config}"] + args)
+
         p = subprocess.run(
             [self.exe, f"--global-config={self.global_config}"] + args,
-            cwd=self.path,
+            cwd=cwd or self.path,
             env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        if p.returncode == 1: return False
-        elif p.returncode == 0: return True
-        else: p.check_returncode()
+
+        if expect_exit_code == 0:
+            try:
+                p.check_returncode()
+            except subprocess.CalledProcessError as e:
+                print(p.stdout.decode("UTF-8"))
+                print(p.stderr.decode("UTF-8"))
+                raise e
+        else:
+            assert(expect_exit_code == p.returncode)
+
+        if capture_output:
+            return (p.stdout, p.stderr)
+        else:
+            assert p.stdout == b''
+            assert p.stderr == b''
 
     def file(self, name=None):
         return Content(self.path,

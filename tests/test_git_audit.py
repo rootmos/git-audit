@@ -4,7 +4,7 @@ import random
 from . import w3, fresh
 from .test_env import test_env
 
-class GitAuditTests(unittest.TestCase):
+class InitTests(unittest.TestCase):
     def test_init_empty_repo(self):
         with test_env() as te:
             te.run(["init"])
@@ -21,6 +21,12 @@ class GitAuditTests(unittest.TestCase):
                 self.assertEqual(f0.content, c.file(f0).content)
                 self.assertNotEqual(f1.content, c.file(f1).content)
 
+    def test_init_outside_repository(self):
+        with test_env() as te:
+            te.run([f"--repository={te.path}", "init"], cwd=te.root)
+            te.inspect()
+
+class AnchorTests(unittest.TestCase):
     def test_anchor(self):
         with test_env() as te:
             te.run(["init", "--no-commit"])
@@ -49,6 +55,7 @@ class GitAuditTests(unittest.TestCase):
             with test_env(te0) as te1:
                 te1.run(["anchor"])
 
+class ValidateTests(unittest.TestCase):
     def test_validate_empty_repo(self):
         with test_env() as te:
             te.run(["init"])
@@ -90,12 +97,20 @@ class GitAuditTests(unittest.TestCase):
                 te1.run(["anchor"])
 
             # not present in upstream repo => validation failure
-            self.assertFalse(te0.run(["validate"]))
+            te0.run(["validate"], expect_exit_code=1)
 
+class SecurityTests(unittest.TestCase):
     def test_ownership(self):
         with test_env() as te0:
             te0.run(["init"])
 
             with test_env(te0, owner_key=fresh.private_key(fresh.mether())) as te1:
                 te1.run(["anchor"])
-                self.assertNotEqual(te1.inspect().commits, te1.commits)
+                self.assertNotEqual(te1.inspect().commits, te0.commits)
+
+class ErrorReportingTests(unittest.TestCase):
+    def test_init_outside_repository(self):
+        with test_env() as te:
+            (stdout, stderr) = te.run(["init"], cwd=te.root, capture_output=True, expect_exit_code=1)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"unable to open a git repository at: .\n")

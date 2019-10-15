@@ -1,6 +1,8 @@
 use config::{Config, ConfigError};
 
-use std::path::Path;
+use log::debug;
+
+use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::prelude::*;
 
@@ -21,9 +23,17 @@ struct Contract {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct Logging {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct SettingsRoot {
     #[serde(skip_serializing_if = "Option::is_none")]
     ethereum: Option<Ethereum>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logging: Option<Logging>,
     contract: Option<Contract>,
 }
 
@@ -44,8 +54,6 @@ impl Settings {
             || dirs::config_dir().unwrap().join("git-audit.json")
         );
         let gp = gc_pb.as_path().to_str().unwrap();
-        log::debug!("reading config: global={} repository={}",
-                    gp, REPO_CONFIG_FILE);
 
         let mut g = Config::default();
         g.merge(config::File::new(gp, config::FileFormat::Json))?;
@@ -80,6 +88,10 @@ impl Settings {
             .and_then(|c| serde_json::to_string(&c.abi).ok()).unwrap()
     }
 
+    pub fn log_file_path(&self) -> Option<&Path> {
+        self.merged.logging.as_ref().and_then(|l| l.file.as_ref().map(|s| Path::new(s)))
+    }
+
     pub fn set_contract(&mut self, address: &str, abi: &str) -> &Self {
         let abi_j: serde_json::Value = serde_json::from_str(abi).unwrap();
         self.repository.contract = Some(Contract {
@@ -89,12 +101,15 @@ impl Settings {
         self
     }
 
-    pub fn write_repository_settings(&self) -> () {
+    pub fn write_repository_settings(&self, root: &Path) -> PathBuf {
         let s = serde_json::to_string(&self.repository).unwrap();
-        match fs::OpenOptions::new().write(true).create_new(true).open(repository_config_file()) {
+        let p = root.join(repository_config_file());
+        debug!("writing repository settings to: {:?}", p);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&p) {
             Ok(mut f) => f.write_all(s.as_bytes()).unwrap(),
             Err(e) => panic!("{}", e)
-        }
+        };
+        p
     }
 
 }

@@ -1,13 +1,16 @@
 use std::time::Duration;
 
+extern crate log;
+use log::{info, warn, debug};
+
 #[macro_use] extern crate mdo;
 extern crate mdo_future;
 use mdo_future::future::{bind, ret};
 
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
+
 extern crate tokio_core;
-extern crate env_logger;
 extern crate dirs;
 extern crate config;
 extern crate hex;
@@ -32,6 +35,9 @@ use web3::confirm::send_raw_transaction_with_confirmation;
 mod settings;
 use settings::Settings;
 
+mod loggers;
+use loggers::UnixSocketLogger;
+
 struct Context<'a, T: web3::Transport> {
     settings: &'a mut Settings,
     web3: &'a web3::Web3<T>,
@@ -52,7 +58,7 @@ impl <T: web3:: Transport> Context<'_, T> {
         let sk = secp256k1::SecretKey::from_slice(&raw).unwrap();
         let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
         let a = &tiny_keccak::keccak256(&pk.serialize_uncompressed()[1..])[12..];
-        log::debug!("using address: {}", hex::encode(a));
+        debug!("using address: {}", hex::encode(a));
         (H160::from_slice(a), H256::from_slice(&raw))
     }
 }
@@ -80,9 +86,10 @@ fn init<'a, T: web3::Transport>(
         rc =<< send_raw_transaction_with_confirmation(
             ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
         let txh = rc.contract_address.unwrap();
-        let () = log::info!("deployed contract: {:?}", txh);
+        let () = info!("deployed contract: {:?}", txh);
         let _ = ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
-        let () = ctx.settings.write_repository_settings();
+        let wd = ctx.repo.workdir().unwrap(); // TODO: make this work in a bare repo
+        let rp = ctx.settings.write_repository_settings(wd);
         let () = if ! matches.is_present("no-commit") {
             let p = if ctx.repo.is_empty().unwrap() { None } else {
                 Some(ctx.repo.head().unwrap().peel_to_commit().unwrap())
@@ -95,7 +102,7 @@ fn init<'a, T: web3::Transport>(
 
             tb.insert(
                 settings::repository_config_file(),
-                ctx.repo.blob_path(settings::repository_config_file()).unwrap(),
+                ctx.repo.blob_path(&rp).unwrap(),
                 0o100644,
             ).unwrap();
             let t = tb.write().unwrap();
@@ -107,7 +114,7 @@ fn init<'a, T: web3::Transport>(
                 &p.iter().collect::<Vec<_>>(),
             ).unwrap();
 
-            log::info!("committed git-audit repository config: {}", c);
+            info!("committed git-audit repository config: {}", c);
         };
         ret ret(0)
     })
@@ -120,7 +127,7 @@ fn anchor<'a, T: web3::Transport>(
     let (a, sk) = ctx.private_key();
     let f = ctx.abi().function("anchor").unwrap().to_owned();
     let h = ctx.repo.head().unwrap().target().unwrap();
-    log::info!("anchoring HEAD: {}", h);
+    info!("anchoring HEAD: {}", h);
     let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
 
     Box::new(mdo! {
@@ -187,28 +194,27 @@ fn validate<'a, T: web3::Transport>(
             for c in cs_contract.iter() {
                 if cs_repo.contains(&c) {
                     good += 1;
-                    log::debug!("commit present in repository: {}", hex::encode(c))
+                    debug!("commit present in repository: {}", hex::encode(c))
                 } else {
                     bad += 1;
-                    log::warn!("commit not present in repository: {}", hex::encode(c))
+                    warn!("commit not present in repository: {}", hex::encode(c))
                 };
             }
 
-            log::info!("validation result: good={} bad={}", good, bad);
+            info!("validation result: good={} bad={}", good, bad);
 
             if bad > 0 { 1 } else { 0 }
         })
     })
 }
 
-fn main() {
-    env_logger::init();
-
+fn run() -> i32 {
     let matches = &App::new("git-audit")
         .version("0.1.0")
         .about("Manages an audit trail for a git repository")
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
+        .arg(Arg::with_name("repository").long("repository").short("r").takes_value(true))
         .subcommand(
             SubCommand::with_name("init")
                 .about("Deploys a Ethereum smart contract to collect the audit trail")
@@ -225,12 +231,32 @@ fn main() {
         .get_matches();
 
     let settings = &mut Settings::new(matches.value_of("global-config")).unwrap();
+
+    if let Some(fp) = settings.log_file_path() {
+        let logger = UnixSocketLogger::new(fp).unwrap();
+        log::set_boxed_logger(Box::new(logger)).unwrap();
+        log::set_max_level(log::LevelFilter::Trace);
+    } else {
+        env_logger::init();
+    };
+
     let mut el = tokio_core::reactor::Core::new().unwrap();
     let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
                                                     &el.handle(), 1).unwrap();
     let web3 = &web3::Web3::new(t);
-    let repo = &Repository::open(".").unwrap();
-    let mut ctx = Context { settings, web3, repo };
+    let repo_path = matches.value_of("repository").unwrap_or(".");
+    let repo = match Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(ref e) if e.code() == git2::ErrorCode::NotFound
+            && e.class() == git2::ErrorClass::Repository => {
+            debug!("unable to open repository: {}", e.message());
+            eprintln!("unable to open a git repository at: {}", repo_path);
+            return 1
+        },
+        Err(ref e) => panic!("unable to open repository: {}", e),
+    };
+
+    let mut ctx = Context { settings, web3, repo: &repo, };
 
     let f = if let Some(matches) = matches.subcommand_matches("init") {
         init(matches, &mut ctx)
@@ -242,6 +268,9 @@ fn main() {
         panic!("invalid subcommand match")
     };
 
-    let ec = el.run(f).unwrap();
-    std::process::exit(ec);
+    el.run(f).unwrap()
+}
+
+fn main() -> () {
+    std::process::exit(run());
 }
