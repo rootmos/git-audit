@@ -30,7 +30,6 @@ use ethereum_tx_sign::RawTransaction;
 extern crate web3;
 use web3::types::{Bytes, H160, H256, U256, U64, CallRequest};
 use web3::futures::Future;
-use web3::confirm::send_raw_transaction_with_confirmation;
 
 mod settings;
 use settings::Settings;
@@ -38,13 +37,41 @@ use settings::Settings;
 mod loggers;
 use loggers::UnixSocketLogger;
 
-struct Context<'a, T: web3::Transport> {
+struct Context<T: web3::Transport> {
     settings: Settings,
-    web3: &'a web3::Web3<T>,
+    web3: web3::Web3<T>,
     repo: Repository,
 }
 
-impl <T: web3:: Transport> Context<'_, T> {
+impl Context<web3::transports::Http> {
+    fn new(
+        event_loop: &tokio_core::reactor::Handle,
+        matches: &ArgMatches,
+        settings: Settings
+    ) -> Self {
+        let t = web3::transports::Http::with_event_loop(
+            settings.ethereum_rpc_target(), event_loop, 1).unwrap();
+        let web3 = web3::Web3::new(t);
+        let repo_path = matches.value_of("repository").unwrap_or(".");
+        let repo = match Repository::open(repo_path) {
+            Ok(r) => {
+                info!("working with repository at: {:?}", r.path());
+                r
+            },
+            Err(ref e) if e.code() == git2::ErrorCode::NotFound
+                && e.class() == git2::ErrorClass::Repository => {
+                debug!("unable to open repository: {}", e.message());
+                eprintln!("unable to open a git repository at: {}", repo_path);
+                std::process::exit(1); // TODO
+            },
+            Err(ref e) => panic!("unable to open repository: {}", e),
+        };
+
+        Context { settings, web3, repo }
+    }
+}
+
+impl <T: web3::Transport> Context<T> {
     fn abi(self: &Self) -> ethabi::Contract {
         ethabi::Contract::load(self.settings.contract_abi_json().as_bytes()).unwrap()
     }
@@ -67,9 +94,9 @@ impl <T: web3:: Transport> Context<'_, T> {
     }
 }
 
-fn init<'a, T: web3::Transport>(
+fn init<'a, T: web3::Transport + 'a>(
     matches: &'a ArgMatches,
-    ctx: &'a mut Context<T>,
+    mut ctx: Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     let (a, sk) = ctx.private_key();
 
@@ -93,8 +120,8 @@ fn init<'a, T: web3::Transport>(
             gas: U256::from(g0 + 123757), // TODO: don't hardcode this value
             data: code,
         }.sign(&sk, &ctx.settings.ethereum_chain_id());
-        rc =<< send_raw_transaction_with_confirmation(
-            ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+        rc =<< ctx.web3.send_raw_transaction_with_confirmation(
+            Bytes::from(tx), Duration::new(1, 0), 0);
         let txh = rc.contract_address.unwrap();
         let () = info!("deployed contract: {:?}", txh);
         let _ = ctx.settings.set_contract(
@@ -131,9 +158,9 @@ fn init<'a, T: web3::Transport>(
     })
 }
 
-fn anchor<'a, T: web3::Transport>(
+fn anchor<'a, T: web3::Transport + 'a>(
     _matches: &'a ArgMatches,
-    ctx: &'a Context<T>,
+    ctx: Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     match ctx.contract_address() {
         None => Box::new(mdo! {
@@ -160,8 +187,8 @@ fn anchor<'a, T: web3::Transport>(
                 let tx = RawTransaction { nonce: n, to: Some(to), gas_price, gas, data,
                     value: U256::from(0),
                 }.sign(&sk, &ctx.settings.ethereum_chain_id());
-                rc =<< send_raw_transaction_with_confirmation(
-                    ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+                rc =<< ctx.web3.send_raw_transaction_with_confirmation(
+                    Bytes::from(tx), Duration::new(1, 0), 0);
                 let () = debug!("anchor transaction call receipt: {:?}", rc);
                 ret match rc.status {
                     Some(U64([1])) => ret(0),
@@ -178,9 +205,9 @@ fn anchor<'a, T: web3::Transport>(
     }
 }
 
-fn validate<'a, T: web3::Transport>(
+fn validate<'a, T: web3::Transport + 'a>(
     _matches: &'a ArgMatches,
-    ctx: &'a Context<T>,
+    ctx: Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
     match ctx.contract_address() {
         None => Box::new(mdo! {
@@ -276,34 +303,19 @@ fn run() -> i32 {
     };
 
     let mut el = tokio_core::reactor::Core::new().unwrap();
-    let t = web3::transports::Http::with_event_loop(settings.ethereum_rpc_target(),
-                                                    &el.handle(), 1).unwrap();
-    let web3 = web3::Web3::new(t);
-    let repo_path = matches.value_of("repository").unwrap_or(".");
-    let repo = match Repository::open(repo_path) {
-        Ok(r) => {
-            info!("working with repository at: {:?}", r.path());
-            r
-        },
-        Err(ref e) if e.code() == git2::ErrorCode::NotFound
-            && e.class() == git2::ErrorClass::Repository => {
-            debug!("unable to open repository: {}", e.message());
-            eprintln!("unable to open a git repository at: {}", repo_path);
-            return 1
-        },
-        Err(ref e) => panic!("unable to open repository: {}", e),
-    };
 
-    let mut ctx = Context { settings, web3: &web3, repo };
-
-    let f = if let Some(matches) = matches.subcommand_matches("init") {
-        init(matches, &mut ctx)
-    } else if let Some(matches) = matches.subcommand_matches("anchor") {
-        anchor(matches, &ctx)
-    } else if let Some(matches) = matches.subcommand_matches("validate") {
-        validate(matches, &ctx)
+    let f = if let Some(subcmd_matches) = matches.subcommand_matches("init") {
+        let ctx = Context::new(&el.handle(), matches, settings);
+        init(subcmd_matches, ctx)
+    } else if let Some(subcmd_matches) = matches.subcommand_matches("anchor") {
+        let ctx = Context::new(&el.handle(), matches, settings);
+        anchor(subcmd_matches, ctx)
+    } else if let Some(subcmd_matches) = matches.subcommand_matches("validate") {
+        let ctx = Context::new(&el.handle(), matches, settings);
+        validate(subcmd_matches, ctx)
     } else {
-        panic!("invalid subcommand match")
+        println!("{}", matches.usage());
+        Box::new(mdo! { ret ret(1) })
     };
 
     el.run(f).unwrap()

@@ -50,15 +50,15 @@ class GitAudit:
         return cs
 
 class test_env:
-    def __init__(self, master=None, owner_key=None):
+    def __init__(self, master=None, **kwargs):
         self.master = master
-        self.owner_key = owner_key or master.owner_key if master else fresh.private_key(ether(1))
+        self.flags = kwargs
+        self.owner_key = self.flags.get("owner_key") or master.owner_key if master else fresh.private_key(ether(1))
         self.exe = os.getenv("GIT_AUDIT_EXE")
 
     def __enter__(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
-        self.global_config = os.path.join(self.root, "global.json")
         self.path = os.path.join(self.root, "repo-" + fresh.salt(5))
         if self.master is None:
             self.repo = pygit2.init_repository(self.path)
@@ -69,16 +69,20 @@ class test_env:
         self.log_thread = threading.Thread(target=self._log_reader)
         self.log_thread.start()
 
-        self.config = {
-            "ethereum": {
-                "private_key": self.owner_key.hex(),
-                "rpc_target": ethereum_rpc_target,
-                "chain_id": w3.eth.chainId,
-            },
-            "logging": {
-                "file": self.log_file_path,
-            },
-        }
+        if self.flags.get("global_config") is False:
+            self.global_config = None
+        else:
+            self.global_config = os.path.join(self.root, "global.json")
+            self.config = {
+                "ethereum": {
+                    "private_key": self.owner_key.hex(),
+                    "rpc_target": ethereum_rpc_target,
+                    "chain_id": w3.eth.chainId,
+                },
+                "logging": {
+                    "file": self.log_file_path,
+                },
+            }
 
         return self
 
@@ -119,10 +123,14 @@ class test_env:
         if os.getenv("RUST_BACKTRACE") is not None:
             env["RUST_BACKTRACE"] = os.getenv("RUST_BACKTRACE")
 
-        print("executing: ", [self.exe, f"--global-config={self.global_config}"] + args)
+        cmd = [self.exe]
+        if self.global_config is not None:
+            cmd.append(f"--global-config={self.global_config}")
+        cmd += args
+        print(f"executing: {cmd}")
 
         p = subprocess.run(
-            [self.exe, f"--global-config={self.global_config}"] + args,
+            cmd,
             cwd=cwd or self.path,
             env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,

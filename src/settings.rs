@@ -51,13 +51,12 @@ pub fn repository_config_file() -> &'static Path {
 
 impl Settings {
     pub fn new(mgc: Option<&str>) -> Result<Self, ConfigError> {
-        let gc_pb = mgc.map(|s| Path::new(s).to_path_buf()).unwrap_or_else(
+        let gp = mgc.map(|s| Path::new(s).to_path_buf()).unwrap_or_else(
             || dirs::config_dir().unwrap().join("git-audit.json")
         );
-        let gp = gc_pb.as_path().to_str().unwrap();
 
         let mut g = Config::default();
-        g.merge(config::File::new(gp, config::FileFormat::Json))?;
+        g.merge(config::File::from(gp).required(false))?;
 
         let mut r = Config::default();
         r.merge(config::File::from(repository_config_file()).required(false))?;

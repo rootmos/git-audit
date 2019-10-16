@@ -128,6 +128,12 @@ class SecurityTests(unittest.TestCase):
                 self.assertEqual(stderr, f"unable to anchor commit in contract: {ca}\n".encode("UTF-8"))
 
 class ErrorReportingTests(unittest.TestCase):
+    def test_no_subcommand(self):
+        with test_env(global_config=fresh.coin_flip()) as te:
+            (stdout, stderr) = te.run([], expect_exit_code=1, capture_output=True)
+            self.assertTrue(str(stdout, "UTF-8").startswith("USAGE"))
+            self.assertEqual(stderr, b"")
+
     def test_init_outside_repository(self):
         with test_env() as te:
             (stdout, stderr) = te.run(["init"], cwd=te.root, capture_output=True, expect_exit_code=1)

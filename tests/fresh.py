@@ -8,6 +8,9 @@ from . import faucets, to_address
 def bs(n):
     return bytes(random.getrandbits(8) for _ in range(n))
 
+def coin_flip():
+    return random.choice([True, False])
+
 def salt(n=5):
     alphabeth = string.ascii_lowercase
     return ''.join(random.choice(alphabeth) for i in range(n))
