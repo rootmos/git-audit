@@ -1,7 +1,7 @@
 import unittest
 import random
 
-from . import w3, fresh, normalize
+from . import w3, fresh, normalize, to_address
 from .test_env import test_env
 
 class InitTests(unittest.TestCase):
@@ -117,9 +117,15 @@ class SecurityTests(unittest.TestCase):
         with test_env() as te0:
             te0.run(["init"])
 
-            with test_env(te0, owner_key=fresh.private_key(fresh.mether())) as te1:
-                te1.run(["anchor"])
+            pk = fresh.private_key(fresh.mether())
+            with test_env(te0, owner_key=pk) as te1:
+                (stdout, stderr) = te1.run(["anchor"], expect_exit_code=1, capture_output=True)
                 self.assertNotEqual(te1.inspect().commits, te0.commits)
+                self.assertEqual(stdout, b"")
+
+                ca = te1.inspect().contract.address.lower()
+                a = to_address(pk).lower()
+                self.assertEqual(stderr, f"unable to anchor commit in contract: {ca}\n".encode("UTF-8"))
 
 class ErrorReportingTests(unittest.TestCase):
     def test_init_outside_repository(self):
@@ -134,8 +140,6 @@ class ErrorReportingTests(unittest.TestCase):
             (stdout, stderr) = te.run(["init"], capture_output=True, expect_exit_code=1)
             self.assertEqual(stdout, b"")
             ca = te.inspect().contract.address.lower()
-            print(ca)
-            print(stderr)
             self.assertEqual(stderr, f"repository is already initialized and anchored to contract: {ca}\n".encode("UTF-8"))
 
     def test_anchor_in_uninitialized_repo(self):

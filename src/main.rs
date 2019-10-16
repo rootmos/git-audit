@@ -28,7 +28,7 @@ extern crate ethereum_tx_sign;
 use ethereum_tx_sign::RawTransaction;
 
 extern crate web3;
-use web3::types::{Bytes, H160, H256, U256, CallRequest};
+use web3::types::{Bytes, H160, H256, U256, U64, CallRequest};
 use web3::futures::Future;
 use web3::confirm::send_raw_transaction_with_confirmation;
 
@@ -160,9 +160,19 @@ fn anchor<'a, T: web3::Transport>(
                 let tx = RawTransaction { nonce: n, to: Some(to), gas_price, gas, data,
                     value: U256::from(0),
                 }.sign(&sk, &ctx.settings.ethereum_chain_id());
-                _ =<< send_raw_transaction_with_confirmation(
+                rc =<< send_raw_transaction_with_confirmation(
                     ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
-                ret ret(0)
+                let () = debug!("anchor transaction call receipt: {:?}", rc);
+                ret match rc.status {
+                    Some(U64([1])) => ret(0),
+                    Some(U64([0])) => {
+                        warn!("anchor transaction call failed: {}", hex::encode(rc.transaction_hash));
+                        eprintln!("unable to anchor commit in contract: 0x{}", hex::encode(to));
+                        ret(1)
+                    },
+                    Some(U64([s])) => panic!("unexpected status: {}", s),
+                    None => panic!("no status returned"),
+                }
             })
         },
     }

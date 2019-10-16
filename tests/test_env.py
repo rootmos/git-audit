@@ -128,20 +128,10 @@ class test_env:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
 
-        def dump_output():
+        if expect_exit_code != p.returncode:
             print(p.stdout.decode("UTF-8"))
             print(p.stderr.decode("UTF-8"))
-
-        if expect_exit_code == 0:
-            try:
-                p.check_returncode()
-            except subprocess.CalledProcessError as e:
-                dump_output()
-                raise e
-        else:
-            if expect_exit_code != p.returncode:
-                dump_output()
-                p.check_returncode()
+            raise RuntimeError(f"unexpected exit code: expected={expect_exit_code} returned={p.returncode}")
 
         if capture_output:
             return (p.stdout, p.stderr)
