@@ -5,7 +5,7 @@
 ```
 git-audit 0.1.0
 Gustav Behm <me@rootmos.io>
-Manages an audit trail for a git repository
+Manages an audit trail for a Git repository by considering it as an Ethereum side-chain
 
 USAGE:
     git-audit [OPTIONS] [SUBCOMMAND]
@@ -16,6 +16,7 @@ FLAGS:
 
 OPTIONS:
     -g, --global-config <global-config>    
+    -r, --repository <repository>          
 
 SUBCOMMANDS:
     anchor      Anchors a commit in the audit trail

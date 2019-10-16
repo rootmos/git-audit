@@ -246,7 +246,7 @@ fn validate<'a, T: web3::Transport>(
 fn run() -> i32 {
     let matches = &App::new("git-audit")
         .version("0.1.0")
-        .about("Manages an audit trail for a git repository")
+        .about("Manages an audit trail for a Git repository by considering it as an Ethereum side-chain")
         .author("Gustav Behm <me@rootmos.io>")
         .arg(Arg::with_name("global-config").long("global-config").short("g").takes_value(true))
         .arg(Arg::with_name("repository").long("repository").short("r").takes_value(true))
