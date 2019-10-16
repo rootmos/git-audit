@@ -6,7 +6,7 @@ import subprocess
 import socket
 import threading
 
-from . import fresh, w3, faucets, ethereum_rpc_target, normalize
+from . import fresh, w3, faucets, ethereum_rpc_target, normalize, ether
 
 class Content:
     def __init__(self, path, name=None, content=None):
@@ -52,7 +52,7 @@ class GitAudit:
 class test_env:
     def __init__(self, master=None, owner_key=None):
         self.master = master
-        self.owner_key = owner_key or master.owner_key if master else fresh.private_key(fresh.mether())
+        self.owner_key = owner_key or master.owner_key if master else fresh.private_key(ether(1))
         self.exe = os.getenv("GIT_AUDIT_EXE")
 
     def __enter__(self):
@@ -128,15 +128,20 @@ class test_env:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
 
+        def dump_output():
+            print(p.stdout.decode("UTF-8"))
+            print(p.stderr.decode("UTF-8"))
+
         if expect_exit_code == 0:
             try:
                 p.check_returncode()
             except subprocess.CalledProcessError as e:
-                print(p.stdout.decode("UTF-8"))
-                print(p.stderr.decode("UTF-8"))
+                dump_output()
                 raise e
         else:
-            assert(expect_exit_code == p.returncode)
+            if expect_exit_code != p.returncode:
+                dump_output()
+                p.check_returncode()
 
         if capture_output:
             return (p.stdout, p.stderr)
@@ -173,7 +178,13 @@ class test_env:
 
     @property
     def commits(self, oid=None):
+        if oid is None:
+            try:
+                oid = self.repo.head.target
+            except:
+                return []
+
         return list(map(
             lambda c: c.id.raw.hex(),
-            self.repo.walk(oid or self.repo.head.target, pygit2.GIT_SORT_TOPOLOGICAL)
+            self.repo.walk(oid, pygit2.GIT_SORT_TOPOLOGICAL)
         ))

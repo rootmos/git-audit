@@ -79,8 +79,8 @@ impl Settings {
         self.merged.ethereum.as_ref().and_then(|e| e.chain_id.as_ref()).unwrap()
     }
 
-    pub fn contract_address(&self) -> &str {
-        self.merged.contract.as_ref().map(|c| c.address.as_str()).unwrap()
+    pub fn contract_address(&self) -> Option<&str> {
+        self.merged.contract.as_ref().map(|c| c.address.as_str())
     }
 
     pub fn contract_abi_json(&self) -> String {

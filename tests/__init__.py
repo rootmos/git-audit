@@ -7,6 +7,9 @@ from binascii import unhexlify
 ethereum_rpc_target = os.getenv("ETHEREUM_RPC_TARGET")
 w3 = web3.Web3(web3.HTTPProvider(ethereum_rpc_target))
 
+def ether(v):
+    return web3.Web3.toWei(v, 'ether');
+
 def to_address(pk):
     if not isinstance(pk, keys.PrivateKey):
         pk = keys.PrivateKey(pk)

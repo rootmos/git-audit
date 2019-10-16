@@ -49,8 +49,8 @@ impl <T: web3:: Transport> Context<'_, T> {
         ethabi::Contract::load(self.settings.contract_abi_json().as_bytes()).unwrap()
     }
 
-    fn contract_address_h160(self: &Self) -> H160 {
-        H160::from_slice(&hex::decode(self.settings.contract_address()).unwrap())
+    fn contract_address_h160(self: &Self) -> Option<H160> {
+        self.settings.contract_address().map(|a| H160::from_slice(&hex::decode(a).unwrap()))
     }
 
     fn private_key(self: &Self) -> (H160, H256) {
@@ -71,6 +71,11 @@ fn init<'a, T: web3::Transport>(
 
     let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
     let abi_json = include_str!("../build/evm/GitAudit.abi");
+
+    if let Some(ca) = ctx.contract_address_h160() {
+        eprintln!("repository is already initialized and anchored to contract: 0x{}", hex::encode(ca));
+        return Box::new(ret(1))
+    }
 
     Box::new(mdo! {
         gp =<< ctx.web3.eth().gas_price();
@@ -124,88 +129,99 @@ fn anchor<'a, T: web3::Transport>(
     _matches: &'a ArgMatches,
     ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    let (a, sk) = ctx.private_key();
-    let f = ctx.abi().function("anchor").unwrap().to_owned();
-    let h = ctx.repo.head().unwrap().target().unwrap();
-    info!("anchoring HEAD: {}", h);
-    let input = f.encode_input(&[ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))]).unwrap();
+    match ctx.contract_address_h160() {
+        None => Box::new(mdo! {
+            let () = eprintln!("repository isn't initialized");
+            ret ret(1)
+        }),
+        Some(ca) => {
+            let (a, sk) = ctx.private_key();
+            let f = ctx.abi().function("anchor").unwrap().to_owned();
+            let h = ctx.repo.head().unwrap().target().unwrap();
+            info!("anchoring HEAD: {}", h);
+            let input = f.encode_input(&[
+                ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))
+            ]).unwrap();
 
-    Box::new(mdo! {
-        gp =<< ctx.web3.eth().gas_price();
-        n =<< ctx.web3.eth().transaction_count(a, None);
-        let tx = RawTransaction {
-            nonce: n,
-            to: Some(ctx.contract_address_h160()),
-            value: U256::from(0),
-            gas_price: gp,
-            gas: U256::from(1000000), // TODO: estimate gas
-            data: input,
-        }.sign(&sk, &ctx.settings.ethereum_chain_id());
-        _ =<< send_raw_transaction_with_confirmation(
-            ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
-        ret ret(0)
-    })
+            Box::new(mdo! {
+                gp =<< ctx.web3.eth().gas_price();
+                n =<< ctx.web3.eth().transaction_count(a, None);
+                let tx = RawTransaction { nonce: n, to: Some(ca),
+                    value: U256::from(0),
+                    gas_price: gp, gas: U256::from(1000000), // TODO: estimate gas
+                    data: input,
+                }.sign(&sk, &ctx.settings.ethereum_chain_id());
+                _ =<< send_raw_transaction_with_confirmation(
+                    ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
+                ret ret(0)
+            })
+        },
+    }
 }
 
 fn validate<'a, T: web3::Transport>(
     _matches: &'a ArgMatches,
     ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    let f = ctx.abi().function("commits").unwrap().to_owned();
-    let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
-    let cr = web3::types::CallRequest {
-        from: None,
-        to: ctx.contract_address_h160(),
-        gas: None,
-        gas_price: None,
-        value: None,
-        data,
-    };
+    match ctx.contract_address_h160() {
+        None => Box::new(mdo! {
+            let () = eprintln!("repository isn't initialized");
+            ret ret(1)
+        }),
+        Some(to) => {
+            let f = ctx.abi().function("commits").unwrap().to_owned();
+            let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
 
-    Box::new(mdo! {
-        Bytes(rsp) =<< ctx.web3.eth().call(cr, None);
-        let cs_contract = match &f.decode_output(&rsp).unwrap()[..] {
-            [ethabi::Token::Array(ts)] => {
-                let mut cs = vec![];
-                for t in ts.iter() {
-                    if let ethabi::Token::Uint(ui) = t {
-                        let mut buf = vec![0; 32];
-                        ui.to_big_endian(&mut buf);
-                        cs.push(buf.split_off(12))
-                    }
-                }
-                cs
-            },
-            _ => panic!("unexpected return types from contract function"),
-        };
-        let cs_repo = {
-            let mut w = ctx.repo.revwalk().unwrap();
-            w.push_head().unwrap();
-            w.map(|i| i.unwrap().as_bytes().to_owned()).collect::<Vec<_>>()
-        };
-        let () = if log::log_enabled!(log::Level::Debug) {
-            for c in &cs_contract { log::debug!("contract commit: {}", hex::encode(c)) }
-            for c in &cs_repo { log::debug!("repository commit: {}", hex::encode(c)) }
-        };
-        ret ret({
-            let mut good = 0;
-            let mut bad = 0;
+            let cr = web3::types::CallRequest {
+                from: None, to, gas: None, gas_price: None, value: None, data,
+            };
 
-            for c in cs_contract.iter() {
-                if cs_repo.contains(&c) {
-                    good += 1;
-                    debug!("commit present in repository: {}", hex::encode(c))
-                } else {
-                    bad += 1;
-                    warn!("commit not present in repository: {}", hex::encode(c))
+            Box::new(mdo! {
+                Bytes(rsp) =<< ctx.web3.eth().call(cr, None);
+                let cs_contract = match &f.decode_output(&rsp).unwrap()[..] {
+                    [ethabi::Token::Array(ts)] => {
+                        let mut cs = vec![];
+                        for t in ts.iter() {
+                            if let ethabi::Token::Uint(ui) = t {
+                                let mut buf = vec![0; 32];
+                                ui.to_big_endian(&mut buf);
+                                cs.push(buf.split_off(12))
+                            }
+                        }
+                        cs
+                    },
+                    _ => panic!("unexpected return types from contract function"),
                 };
-            }
+                let cs_repo = {
+                    let mut w = ctx.repo.revwalk().unwrap();
+                    w.push_head().unwrap();
+                    w.map(|i| i.unwrap().as_bytes().to_owned()).collect::<Vec<_>>()
+                };
+                let () = if log::log_enabled!(log::Level::Debug) {
+                    for c in &cs_contract { log::debug!("contract commit: {}", hex::encode(c)) }
+                    for c in &cs_repo { log::debug!("repository commit: {}", hex::encode(c)) }
+                };
+                ret ret({
+                    let mut good = 0;
+                    let mut bad = 0;
 
-            info!("validation result: good={} bad={}", good, bad);
+                    for c in cs_contract.iter() {
+                        if cs_repo.contains(&c) {
+                            good += 1;
+                            debug!("commit present in repository: {}", hex::encode(c))
+                        } else {
+                            bad += 1;
+                            warn!("commit not present in repository: {}", hex::encode(c))
+                        };
+                    }
 
-            if bad > 0 { 1 } else { 0 }
-        })
-    })
+                    info!("validation result: good={} bad={}", good, bad);
+
+                    if bad > 0 { 1 } else { 0 }
+                })
+            })
+        },
+    }
 }
 
 fn run() -> i32 {

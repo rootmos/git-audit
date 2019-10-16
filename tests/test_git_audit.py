@@ -5,9 +5,19 @@ from . import w3, fresh
 from .test_env import test_env
 
 class InitTests(unittest.TestCase):
+    def test_init_commit(self):
+        with test_env() as te:
+            [] = te.commits
+            te.run(["init"])
+            [c] = map(lambda c: te.repo[c], te.commits)
+            self.assertEqual(c.message, "Initializing git-audit")
+            self.assertEqual((c.author.name, c.author.email), ("git-audit", "git-audit@rootmos.io"))
+            self.assertEqual(c.author, c.committer)
+            self.assertNotEqual(len(w3.eth.getCode(te.inspect().contract.address)), 0)
+
     def test_init_empty_repo(self):
         with test_env() as te:
-            te.run(["init"])
+            te.run(["init", "--no-commit"])
             self.assertNotEqual(len(w3.eth.getCode(te.inspect().contract.address)), 0)
 
     def test_init_non_empty_repo(self):
@@ -114,3 +124,25 @@ class ErrorReportingTests(unittest.TestCase):
             (stdout, stderr) = te.run(["init"], cwd=te.root, capture_output=True, expect_exit_code=1)
             self.assertEqual(stdout, b"")
             self.assertEqual(stderr, b"unable to open a git repository at: .\n")
+
+    def test_init_twice(self):
+        with test_env() as te:
+            te.run(["init"])
+            (stdout, stderr) = te.run(["init"], capture_output=True, expect_exit_code=1)
+            self.assertEqual(stdout, b"")
+            ca = te.inspect().contract.address.lower()
+            print(ca)
+            print(stderr)
+            self.assertEqual(stderr, f"repository is already initialized and anchored to contract: {ca}\n".encode("UTF-8"))
+
+    def test_anchor_in_uninitialized_repo(self):
+        with test_env() as te:
+            (stdout, stderr) = te.run(["anchor"], capture_output=True, expect_exit_code=1)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"repository isn't initialized\n")
+
+    def test_validate_in_uninitialized_repo(self):
+        with test_env() as te:
+            (stdout, stderr) = te.run(["validate"], capture_output=True, expect_exit_code=1)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"repository isn't initialized\n")
