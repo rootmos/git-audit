@@ -35,11 +35,11 @@ class GitAudit:
         self.path = path
 
         with open(os.path.join(path, ".git-audit.json")) as f:
-            c = json.loads(f.read())
+            self.config = json.loads(f.read())
 
         self.contract = w3.eth.contract(
-            address = normalize(c["contract"]["address"]),
-            abi = c["contract"]["abi"],
+            address = normalize(self.config["contract"]["address"]),
+            abi = self.config["contract"]["abi"],
         )
 
     @property

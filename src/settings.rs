@@ -19,6 +19,7 @@ struct Ethereum {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Contract {
     address: String,
+    owner: String,
     abi: serde_json::Value,
 }
 
@@ -83,6 +84,10 @@ impl Settings {
         self.merged.contract.as_ref().map(|c| c.address.as_str())
     }
 
+    pub fn contract_owner(&self) -> Option<&str> {
+        self.merged.contract.as_ref().map(|c| c.owner.as_str())
+    }
+
     pub fn contract_abi_json(&self) -> String {
         self.merged.contract.as_ref()
             .and_then(|c| serde_json::to_string(&c.abi).ok()).unwrap()
@@ -92,10 +97,10 @@ impl Settings {
         self.merged.logging.as_ref().and_then(|l| l.file.as_ref().map(|s| Path::new(s)))
     }
 
-    pub fn set_contract(&mut self, address: &str, abi: &str) -> &Self {
+    pub fn set_contract(&mut self, address: &str, owner: &str, abi: &str) -> &Self {
         let abi_j: serde_json::Value = serde_json::from_str(abi).unwrap();
         self.repository.contract = Some(Contract {
-            address: address.to_owned(), abi: abi_j,
+            address: address.to_owned(), owner: owner.to_owned(), abi: abi_j,
         });
         self.merged.contract = self.repository.contract.clone();
         self

@@ -1,7 +1,7 @@
 import unittest
 import random
 
-from . import w3, fresh
+from . import w3, fresh, normalize
 from .test_env import test_env
 
 class InitTests(unittest.TestCase):
@@ -13,7 +13,10 @@ class InitTests(unittest.TestCase):
             self.assertEqual(c.message, "Initializing git-audit")
             self.assertEqual((c.author.name, c.author.email), ("git-audit", "git-audit@rootmos.io"))
             self.assertEqual(c.author, c.committer)
-            self.assertNotEqual(len(w3.eth.getCode(te.inspect().contract.address)), 0)
+            ga = te.inspect()
+            self.assertNotEqual(len(w3.eth.getCode(ga.contract.address)), 0)
+            self.assertEqual(normalize(ga.config["contract"]["owner"]),
+                ga.contract.functions.owner().call())
 
     def test_init_empty_repo(self):
         with test_env() as te:

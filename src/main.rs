@@ -28,7 +28,7 @@ extern crate ethereum_tx_sign;
 use ethereum_tx_sign::RawTransaction;
 
 extern crate web3;
-use web3::types::{Bytes, H160, H256, U256};
+use web3::types::{Bytes, H160, H256, U256, CallRequest};
 use web3::futures::Future;
 use web3::confirm::send_raw_transaction_with_confirmation;
 
@@ -49,8 +49,12 @@ impl <T: web3:: Transport> Context<'_, T> {
         ethabi::Contract::load(self.settings.contract_abi_json().as_bytes()).unwrap()
     }
 
-    fn contract_address_h160(self: &Self) -> Option<H160> {
+    fn contract_address(self: &Self) -> Option<H160> {
         self.settings.contract_address().map(|a| H160::from_slice(&hex::decode(a).unwrap()))
+    }
+
+    fn contract_owner(self: &Self) -> Option<H160> {
+        self.settings.contract_owner().map(|a| H160::from_slice(&hex::decode(a).unwrap()))
     }
 
     fn private_key(self: &Self) -> (H160, H256) {
@@ -72,7 +76,7 @@ fn init<'a, T: web3::Transport>(
     let code = hex::decode(include_str!("../build/evm/GitAudit.bin")).unwrap();
     let abi_json = include_str!("../build/evm/GitAudit.abi");
 
-    if let Some(ca) = ctx.contract_address_h160() {
+    if let Some(ca) = ctx.contract_address() {
         eprintln!("repository is already initialized and anchored to contract: 0x{}", hex::encode(ca));
         return Box::new(ret(1))
     }
@@ -80,19 +84,21 @@ fn init<'a, T: web3::Transport>(
     Box::new(mdo! {
         gp =<< ctx.web3.eth().gas_price();
         n =<< ctx.web3.eth().transaction_count(a, None);
+        let g0 = 21000 + 32000 + 68 * code.len();
         let tx = RawTransaction {
             nonce: n,
             to: None,
             value: U256::from(0),
             gas_price: gp,
-            gas: U256::from(1000000), // TODO: estimate gas
+            gas: U256::from(g0 + 123757), // TODO: don't hardcode this value
             data: code,
         }.sign(&sk, &ctx.settings.ethereum_chain_id());
         rc =<< send_raw_transaction_with_confirmation(
             ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
         let txh = rc.contract_address.unwrap();
         let () = info!("deployed contract: {:?}", txh);
-        let _ = ctx.settings.set_contract(&hex::encode(txh.as_bytes()), abi_json);
+        let _ = ctx.settings.set_contract(
+            &hex::encode(txh.as_bytes()), &hex::encode(a.as_bytes()), abi_json);
         let wd = ctx.repo.workdir().unwrap(); // TODO: make this work in a bare repo
         let rp = ctx.settings.write_repository_settings(wd);
         let () = if ! matches.is_present("no-commit") {
@@ -129,27 +135,30 @@ fn anchor<'a, T: web3::Transport>(
     _matches: &'a ArgMatches,
     ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    match ctx.contract_address_h160() {
+    match ctx.contract_address() {
         None => Box::new(mdo! {
             let () = eprintln!("repository isn't initialized");
             ret ret(1)
         }),
-        Some(ca) => {
+        Some(to) => {
             let (a, sk) = ctx.private_key();
             let f = ctx.abi().function("anchor").unwrap().to_owned();
             let h = ctx.repo.head().unwrap().target().unwrap();
             info!("anchoring HEAD: {}", h);
-            let input = f.encode_input(&[
+            let data = f.encode_input(&[
                 ethabi::Token::Uint(primitive_types::U256::from_big_endian(h.as_bytes()))
             ]).unwrap();
 
             Box::new(mdo! {
-                gp =<< ctx.web3.eth().gas_price();
+                gas_price =<< ctx.web3.eth().gas_price();
+                gas =<< ctx.web3.eth().estimate_gas(CallRequest {
+                    from: ctx.contract_owner(), to, gas: None, gas_price: Some(gas_price), value: None,
+                    data: Some(Bytes::from(data.to_owned()))
+                }, None);
+                let () = debug!("estimated gas_limit for anchor() call: {}", gas);
                 n =<< ctx.web3.eth().transaction_count(a, None);
-                let tx = RawTransaction { nonce: n, to: Some(ca),
+                let tx = RawTransaction { nonce: n, to: Some(to), gas_price, gas, data,
                     value: U256::from(0),
-                    gas_price: gp, gas: U256::from(1000000), // TODO: estimate gas
-                    data: input,
                 }.sign(&sk, &ctx.settings.ethereum_chain_id());
                 _ =<< send_raw_transaction_with_confirmation(
                     ctx.web3.transport(), Bytes::from(tx), Duration::new(1, 0), 0);
@@ -163,7 +172,7 @@ fn validate<'a, T: web3::Transport>(
     _matches: &'a ArgMatches,
     ctx: &'a Context<T>,
 ) -> Box<dyn Future<Item=i32, Error=web3::Error> + 'a> {
-    match ctx.contract_address_h160() {
+    match ctx.contract_address() {
         None => Box::new(mdo! {
             let () = eprintln!("repository isn't initialized");
             ret ret(1)
@@ -172,7 +181,7 @@ fn validate<'a, T: web3::Transport>(
             let f = ctx.abi().function("commits").unwrap().to_owned();
             let data = Some(Bytes::from(f.encode_input(&[]).unwrap()));
 
-            let cr = web3::types::CallRequest {
+            let cr = CallRequest {
                 from: None, to, gas: None, gas_price: None, value: None, data,
             };
 
