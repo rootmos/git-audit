@@ -27,7 +27,7 @@ packaging==19.2
 parsimonious==0.8.1
 pluggy==0.13.0
 protobuf==3.10.0
-py==1.8.0
+py==1.10.0
 pycparser==2.19
 pycryptodome==3.9.0
 pygit2==0.28.2
