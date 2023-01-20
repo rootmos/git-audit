@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = [ "Gustav Behm <me@rootmos.io>" ]
 
 [dependencies]
-git2 = "0.10.1"
+git2 = "0.16.1"
 config = "0.9.3"
 clap = "2.33.0"
 dirs = "2.0.2"
